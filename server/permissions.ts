@@ -1,0 +1,33 @@
+export const PERMISSIONS = {
+  'dashboard.read': 'Business dashboard and operational analytics',
+  'products.read': 'Search and view product catalogue',
+  'products.write': 'Create products and edit product metadata',
+  'prices.write': 'Manually maintain current product prices',
+  'sales.create': 'Process sales in an assigned register session',
+  'sales.read': 'Read branch sales; cashiers are restricted to their own',
+  'sales.discount': 'Authorise sale discounts and wholesale pricing',
+  'inventory.read': 'Read stock and inventory movements',
+  'inventory.receive': 'Submit purchases and receiving records',
+  'inventory.post': 'Post stock receipts directly as an administrator',
+  'inventory.opening': 'Enter audited opening stock once per product/branch',
+  'inventory.request': 'Submit stock counts, wastage and adjustments for approval',
+  'suppliers.read': 'Read suppliers', 'suppliers.write': 'Maintain supplier master records',
+  'expenses.read': 'Read branch expenses', 'expenses.create': 'Post immutable expenses',
+  'sessions.own': 'Open and close your assigned cash session',
+  'reconciliations.read': 'View branch closing reports',
+  'requests.create': 'Submit correction requests', 'approvals.read': 'View all branch requests',
+  'approvals.review': 'Approve, reject or clarify requests made by another user',
+  'reports.read': 'Financial, sales and expense reporting',
+  'reports.inventory': 'Inventory and purchase reporting',
+  'staff.read': 'Read staff performance', 'staff.write': 'Provision and manage staff access',
+  'audit.read': 'Read and export the audit trail', 'settings.write': 'Change business settings',
+} as const;
+export const ROLE_NAMES: Record<string, string> = {
+  super_admin: 'Super Admin', admin: 'Administrator', accountant: 'Staff Accountant', cashier: 'Cashier', inventory: 'Inventory Staff',
+};
+export const ROLE_PERMISSIONS: Record<string, string[]> = {
+  super_admin: Object.keys(PERMISSIONS), admin: Object.keys(PERMISSIONS),
+  accountant: ['products.read','sales.create','sales.read','inventory.read','inventory.receive','inventory.request','suppliers.read','expenses.read','expenses.create','sessions.own','reconciliations.read','requests.create','reports.read','reports.inventory'],
+  cashier: ['products.read','sales.create','sales.read','sessions.own','requests.create'],
+  inventory: ['products.read','inventory.read','inventory.receive','inventory.request','suppliers.read','requests.create','reports.inventory'],
+};

@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+data/*
+!data/.gitkeep
+playwright-report/
+test-results/
+*.log
+
+.cache/
+.npm/
+.local/
+.arena/
