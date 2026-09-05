@@ -1,2 +1,52 @@
 <!doctype html>
-<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><meta name="theme-color" content="#245745"/><meta name="description" content="Kilele — a controlled point of sale and business workspace for Kenya's beverage retailers."/><link rel="icon" href="/favicon.svg"/><title>Kilele · Retail workspace</title></head><body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body></html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#245745" />
+    <meta
+      name="description"
+      content="Kilele — a controlled point of sale and business workspace for Kenya's beverage retailers."
+    />
+    <link rel="icon" href="/favicon.svg" />
+    <title>Kilele · Retail workspace</title>
+  </head>
+  <body>
+    <div id="root">
+      <section
+        style="
+          max-width: 640px;
+          margin: 8vh auto;
+          padding: 32px;
+          font:
+            16px/1.7 system-ui,
+            sans-serif;
+          color: #254333;
+          background: #f4f7ef;
+          border: 1px solid #dce5d6;
+          border-radius: 14px;
+        "
+      >
+        <strong style="font-size: 25px">kilele</strong>
+        <h1 style="font-size: 24px">Opening your retail workspace…</h1>
+        <p>
+          If this message stays visible, the browser could not load the built application. No financial
+          operations are available on this screen.
+        </p>
+        <details>
+          <summary>Cloudflare deployment help</summary>
+          <p>
+            Build command: <code>npm run build:pages</code><br />Build output directory:
+            <code>dist/client</code><br />Do not publish the repository root or raw TypeScript files.
+          </p>
+          <p>
+            The business API must also be hosted and connected. A successful static upload alone is not a
+            working POS.
+          </p>
+        </details>
+        <noscript><p>JavaScript must be enabled to open Kilele.</p></noscript>
+      </section>
+    </div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

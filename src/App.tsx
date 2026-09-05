@@ -1,3 +1,4 @@
+import ConnectionProblem from './components/ConnectionProblem';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth, AuthProvider, ToastProvider } from './lib/state';
 import { Loading, ErrorState } from './components/ui';
@@ -39,6 +40,7 @@ function Workspace() {
         <Loading label="Opening your retail workspace…" />
       </div>
     );
+  if (auth.error && !auth.user) return <ConnectionProblem error={auth.error} retry={auth.refresh} />;
   if (!auth.user || auth.user.must_change_password) return <Login />;
   const home = auth.can('dashboard.read') ? '/' : auth.can('sales.create') ? '/pos' : '/inventory';
   return (

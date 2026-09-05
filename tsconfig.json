@@ -11,7 +11,8 @@
     "resolveJsonModule": true,
     "allowImportingTsExtensions": true,
     "noEmit": true,
-    "types": ["node", "vite/client"]
+    "types": ["node", "vite/client"],
+    "allowJs": true
   },
-  "include": ["src", "server", "tests", "e2e", "*.ts"]
+  "include": ["src", "server", "shared", "functions", "scripts", "tests", "e2e", "*.ts"]
 }

@@ -170,3 +170,15 @@ describe('Client submission recovery', () => {
     expect(resolveScan(products, 'unknown')).toBeNull();
   });
 });
+
+it('does not recursively request session refresh when the session endpoint itself returns 401', async () => {
+  const listener = vi.fn();
+  window.addEventListener('auth-expired', listener);
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockResolvedValue(Response.json({ error: 'Unauthorised upstream' }, { status: 401 })),
+  );
+  await expect(api('/auth/me')).rejects.toMatchObject({ status: 401 });
+  expect(listener).not.toHaveBeenCalled();
+  window.removeEventListener('auth-expired', listener);
+});

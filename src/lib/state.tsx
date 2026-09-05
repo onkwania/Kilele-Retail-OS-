@@ -12,6 +12,32 @@ type AuthState = {
   can: (p: string) => boolean;
 };
 const AuthContext = createContext<AuthState>(null!);
+function validateSession(data: Row) {
+  const object = (value: unknown): value is Row =>
+    !!value && typeof value === 'object' && !Array.isArray(value);
+  const valid =
+    object(data) &&
+    Object.hasOwn(data, 'user') &&
+    typeof data.preview === 'boolean' &&
+    (data.user === null ||
+      (object(data.user) &&
+        typeof data.user.id === 'string' &&
+        typeof data.user.business_id === 'string' &&
+        typeof data.user.branch_id === 'string' &&
+        Array.isArray(data.user.permissions) &&
+        data.user.permissions.every((p: unknown) => typeof p === 'string') &&
+        typeof data.csrf === 'string' &&
+        data.csrf.length >= 16 &&
+        object(data.business) &&
+        object(data.branch) &&
+        data.business.id === data.user.business_id &&
+        data.branch.id === data.user.branch_id));
+  if (!valid)
+    throw new Error(
+      'The configured API returned an unexpected sign-in response. Check that /api points to the Kilele business server, not a static page or a database project URL.',
+    );
+  return data;
+}
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState({
     user: null as User | null,
@@ -23,7 +49,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   });
   const refresh = useCallback(async () => {
     try {
-      const data = await api('/auth/me');
+      const data = validateSession(await api('/auth/me'));
       setCsrf(data.csrf ?? '');
       setApiActor(data.user ?? null);
       setState({
@@ -42,10 +68,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let active = true;
     async function init() {
       try {
-        let data = await api('/auth/me');
+        let data = validateSession(await api('/auth/me'));
         if (!data.user && data.preview && !sessionStorage.getItem('kilele-signed-out')) {
           await api('/auth/preview', { method: 'POST' });
-          data = await api('/auth/me');
+          data = validateSession(await api('/auth/me'));
         }
         if (active) {
           setCsrf(data.csrf ?? '');

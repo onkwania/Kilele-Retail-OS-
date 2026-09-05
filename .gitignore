@@ -17,3 +17,8 @@ test-results/
 .sudo_as_admin_successful
 
 /kilele-retail-os-source.zip
+
+# Local Cloudflare credentials/state must never be published.
+.wrangler/
+.dev.vars
+.dev.vars.*

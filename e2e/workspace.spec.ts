@@ -799,3 +799,20 @@ test('second-pass dashboard, barcode keyboard input, literal XSS text, electroni
   expect((await json(page, '/integrity')).ok).toBe(true);
   expect(errors).toEqual([]);
 });
+
+test('deployment routing failure is visible and cannot masquerade as a working login', async ({ page }) => {
+  await page.route('**/api/auth/me', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'text/html',
+      body: '<!doctype html><html>Static fallback is not a Kilele API.</html>',
+    }),
+  );
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: /business API isn’t connected/ })).toBeVisible();
+  await expect(page.getByLabel(/^Email address/)).toHaveCount(0);
+  await expect(page.getByText('Not verified', { exact: true })).toHaveCount(2);
+  await page.unroute('**/api/auth/me');
+  await page.getByRole('button', { name: 'Retry connection' }).click();
+  await expect(page.getByLabel(/^Email address/)).toBeVisible();
+});

@@ -17,3 +17,7 @@ test-results
 *.log
 
 *.zip
+
+.wrangler
+.dev.vars
+.dev.vars.*

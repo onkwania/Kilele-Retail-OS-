@@ -8,6 +8,10 @@ A working, production-oriented retail POS and business-management application fo
 
 The existing architecture was audited and extended, not rebuilt. See the [second-pass audit/final status](docs/SECOND_PASS_AUDIT.md), [181-row requirement matrix](docs/REQUIREMENTS_MATRIX.md) and [execution evidence](docs/SECOND_PASS_VERIFICATION.json). The updated suite contains **86 automated tests and eight real-browser scenarios**. External fiscal, provider, hardware and host acceptance gates remain open; this is **not an unconditional production go-live declaration**.
 
+## Cloudflare Pages deployment
+
+For the connected Pages project, use **`npm run build:pages` → `dist/client`**, not the repository root. Read [Cloudflare setup and safe API connection](docs/CLOUDFLARE_SETUP.md) before redeploying. The Pages adapter fails closed until an actual Kilele API is configured; it does **not** automatically connect Supabase or replace the existing database.
+
 ## Start here
 
 | You want to…                                   | Go to…                                                                               |

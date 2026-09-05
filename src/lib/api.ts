@@ -211,7 +211,7 @@ export async function api<T = Row>(
     if (storageKey && (response.ok || !hadPending || data.code === 'SUBMISSION_CANCELLED'))
       clearPendingSubmission(storageKey);
     if (!response.ok) {
-      if (response.status === 401) window.dispatchEvent(new Event('auth-expired'));
+      if (response.status === 401 && path !== '/auth/me') window.dispatchEvent(new Event('auth-expired'));
       throw new ApiError(data.error ?? 'The request could not be completed.', response.status, data.code);
     }
     return data as T;
