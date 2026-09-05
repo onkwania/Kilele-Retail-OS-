@@ -2,7 +2,8 @@ import 'dotenv/config';
 import express from 'express';
 import { resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { createDb, bootstrap } from './db.js';
+import { seedCatalogue } from './catalogue.js';
+import { actorFor, createDb, bootstrap } from './db.js';
 import { one } from './core.js';
 import { createApp } from './app.js';
 const production = process.env.NODE_ENV === 'production';
@@ -13,6 +14,7 @@ if (!one(db, 'SELECT id FROM users LIMIT 1')) {
   if (!preview) throw new Error('Run npm run bootstrap with owner credentials before starting the server.');
   bootstrap(db, { name: 'Workspace Owner', email: 'owner@preview.kilele.local', password: randomBytes(36).toString('base64url'), business: 'Kilele Bottle Store' });
 }
+seedCatalogue(db,actorFor(db,one(db,"SELECT id FROM users WHERE role_id='super_admin' LIMIT 1")!.id)!);
 const app = createApp(db, { production, preview, origin: process.env.APP_ORIGIN });
 if (production) {
   app.use(express.static(resolve('dist/client'), { index: false, maxAge: '1h' }));

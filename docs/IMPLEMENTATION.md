@@ -26,3 +26,5 @@ The sandbox preview is an explicitly isolated, non-production workspace. Product
 
 ## Phase records
 - Phase 1 backend foundation verified: 7 automated tests; typecheck, lint, production build and SQLite integrity review passed. Tables are business/branch scoped; role matrix reviewed. No financial seed data. Browser auth and staff UI will be exercised during integration.
+- Phase 2 backend verified: 10 tests at checkpoint; sourced catalogue with all prices null; versioned bulk price endpoint, immutable price history, metadata/barcode workflows and permission review passed. Frontend bulk sheet remains integration work.
+- Phase 3 backend verified: 16 tests at checkpoint; exact quotes, split tenders, change, cost/tax snapshots, receipt PDF, stock-ledger trigger, balanced journal and idempotent checkout. Build/type/lint/integrity passed. Added a database guard requiring a price-history entry before price changes. POS UI and browser acceptance remain integration work.

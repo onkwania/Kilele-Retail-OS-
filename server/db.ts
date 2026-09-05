@@ -27,6 +27,17 @@ export function createDb(path = ':memory:') {
     CREATE TRIGGER IF NOT EXISTS movement_updates_inventory AFTER INSERT ON inventory_movements
     BEGIN UPDATE inventory SET quantity=NEW.new_qty, value_cents=NEW.new_value_cents, version=version+1
     WHERE business_id=NEW.business_id AND branch_id=NEW.branch_id AND product_id=NEW.product_id; END;`);
+  db.exec(`CREATE TRIGGER IF NOT EXISTS product_price_guard BEFORE UPDATE ON products
+    WHEN (NEW.cost_cents IS NOT OLD.cost_cents OR NEW.selling_cents IS NOT OLD.selling_cents OR NEW.wholesale_cents IS NOT OLD.wholesale_cents OR NEW.promo_cents IS NOT OLD.promo_cents OR NEW.tax_mode<>OLD.tax_mode OR NEW.tax_bps<>OLD.tax_bps)
+    AND NOT EXISTS(SELECT 1 FROM price_history h WHERE h.product_id=OLD.id
+      AND json_extract(h.previous_json,'$.cost_cents') IS OLD.cost_cents AND json_extract(h.next_json,'$.cost_cents') IS NEW.cost_cents
+      AND json_extract(h.previous_json,'$.selling_cents') IS OLD.selling_cents AND json_extract(h.next_json,'$.selling_cents') IS NEW.selling_cents
+      AND json_extract(h.previous_json,'$.wholesale_cents') IS OLD.wholesale_cents AND json_extract(h.next_json,'$.wholesale_cents') IS NEW.wholesale_cents
+      AND json_extract(h.previous_json,'$.promo_cents') IS OLD.promo_cents AND json_extract(h.next_json,'$.promo_cents') IS NEW.promo_cents
+      AND json_extract(h.previous_json,'$.tax_mode') IS OLD.tax_mode AND json_extract(h.next_json,'$.tax_mode') IS NEW.tax_mode
+      AND json_extract(h.previous_json,'$.tax_bps') IS OLD.tax_bps AND json_extract(h.next_json,'$.tax_bps') IS NEW.tax_bps
+      AND h.rowid=(SELECT MAX(rowid) FROM price_history WHERE product_id=OLD.id))
+    BEGIN SELECT RAISE(ABORT,'Price changes require a matching immutable price history'); END;`);
   db.transaction(() => {
     for (const [key, description] of Object.entries(PERMISSIONS)) db.prepare('INSERT OR IGNORE INTO permissions VALUES(?,?)').run(key, description);
     for (const [key, name] of Object.entries(ROLE_NAMES)) {
