@@ -32,6 +32,6 @@ export function sessionTotals(db:DB,a:Actor,sessionId:string) {
   const payments=all(db,'SELECT method,COALESCE(SUM(amount_cents),0) n FROM payments WHERE session_id=? GROUP BY method',s.id);
   const byMethod=(method:string)=>payments.find(p=>p.method===method)?.n??0;
   const cashExpenses=one(db,"SELECT COALESCE(SUM(amount_cents),0) n FROM expenses WHERE session_id=? AND method='Cash'",s.id)!.n-one(db,"SELECT COALESCE(SUM(amount_cents),0) n FROM expense_reversals WHERE session_id=? AND method='Cash'",s.id)!.n;
-  const suppliers=one(db,"SELECT COALESCE(SUM(amount_cents),0) n FROM supplier_payments WHERE session_id=? AND method='Cash'",s.id)!.n;
+  const suppliers=one(db,"SELECT COALESCE(SUM(amount_cents),0) n FROM supplier_payments WHERE session_id=? AND method='Cash'",s.id)!.n-one(db,"SELECT COALESCE(SUM(amount_cents),0) n FROM supplier_refunds WHERE session_id=? AND method='Cash'",s.id)!.n-one(db,"SELECT COALESCE(SUM(amount_cents),0) n FROM supplier_payment_reversals WHERE session_id=? AND method='Cash'",s.id)!.n;
   return {...s,cash_sales_cents:byMethod('Cash'),cash_expenses_cents:cashExpenses,cash_supplier_cents:suppliers,expected_cents:s.opening_cents+byMethod('Cash')-cashExpenses-suppliers,mpesa_cents:byMethod('M-Pesa'),card_cents:byMethod('Card'),bank_cents:byMethod('Bank')};
 }

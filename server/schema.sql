@@ -292,3 +292,31 @@ CREATE TRIGGER IF NOT EXISTS cash_session_preserve BEFORE UPDATE ON cash_session
 WHEN OLD.closed_at IS NOT NULL OR NEW.id<>OLD.id OR NEW.business_id<>OLD.business_id OR NEW.branch_id<>OLD.branch_id OR NEW.user_id<>OLD.user_id OR NEW.register<>OLD.register OR NEW.opening_cents<>OLD.opening_cents OR NEW.opened_at<>OLD.opened_at OR NEW.closed_at IS NULL
 BEGIN SELECT RAISE(ABORT,'Only closing a live session is allowed'); END;
 CREATE TRIGGER IF NOT EXISTS cash_session_no_delete BEFORE DELETE ON cash_sessions BEGIN SELECT RAISE(ABORT,'Sessions cannot be deleted'); END;
+CREATE TABLE IF NOT EXISTS purchase_reversals (
+ id TEXT PRIMARY KEY, ref TEXT NOT NULL UNIQUE, business_id TEXT NOT NULL, branch_id TEXT NOT NULL,
+ purchase_id TEXT NOT NULL UNIQUE, approval_id TEXT NOT NULL UNIQUE REFERENCES approval_requests(id),
+ user_id TEXT NOT NULL REFERENCES users(id), total_cents INTEGER NOT NULL, inventory_cents INTEGER NOT NULL,
+ reason TEXT NOT NULL, created_at TEXT NOT NULL,
+ FOREIGN KEY(purchase_id,business_id,branch_id) REFERENCES purchases(id,business_id,branch_id)
+);
+CREATE TABLE IF NOT EXISTS supplier_refunds (
+ id TEXT PRIMARY KEY, business_id TEXT NOT NULL, branch_id TEXT NOT NULL, purchase_id TEXT NOT NULL,
+ reversal_id TEXT NOT NULL REFERENCES purchase_reversals(id), user_id TEXT NOT NULL REFERENCES users(id),
+ session_id TEXT, method TEXT NOT NULL, amount_cents INTEGER NOT NULL CHECK(amount_cents>0), created_at TEXT NOT NULL,
+ FOREIGN KEY(purchase_id,business_id,branch_id) REFERENCES purchases(id,business_id,branch_id),
+ FOREIGN KEY(session_id,business_id,branch_id) REFERENCES cash_sessions(id,business_id,branch_id)
+);
+CREATE TABLE IF NOT EXISTS supplier_payment_reversals (
+ id TEXT PRIMARY KEY, ref TEXT NOT NULL UNIQUE, business_id TEXT NOT NULL, branch_id TEXT NOT NULL,
+ payment_id TEXT NOT NULL UNIQUE REFERENCES supplier_payments(id), purchase_id TEXT NOT NULL REFERENCES purchases(id),
+ approval_id TEXT NOT NULL UNIQUE REFERENCES approval_requests(id), user_id TEXT NOT NULL REFERENCES users(id), session_id TEXT,
+ method TEXT NOT NULL, amount_cents INTEGER NOT NULL CHECK(amount_cents>0), reason TEXT NOT NULL, created_at TEXT NOT NULL,
+ FOREIGN KEY(session_id,business_id,branch_id) REFERENCES cash_sessions(id,business_id,branch_id)
+);
+CREATE TABLE IF NOT EXISTS reconciliation_adjustments (
+ id TEXT PRIMARY KEY, ref TEXT NOT NULL UNIQUE, business_id TEXT NOT NULL, branch_id TEXT NOT NULL,
+ reconciliation_id TEXT NOT NULL REFERENCES reconciliations(id), approval_id TEXT NOT NULL UNIQUE REFERENCES approval_requests(id),
+ user_id TEXT NOT NULL REFERENCES users(id), previous_actual_cents INTEGER NOT NULL, actual_cents INTEGER NOT NULL CHECK(actual_cents>=0),
+ previous_variance_cents INTEGER NOT NULL, variance_cents INTEGER NOT NULL, reason TEXT NOT NULL, created_at TEXT NOT NULL,
+ FOREIGN KEY(branch_id,business_id) REFERENCES branches(id,business_id)
+);

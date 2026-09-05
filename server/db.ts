@@ -9,7 +9,7 @@ export function hashPassword(password: string) {
   const salt = randomBytes(16).toString('hex');
   return `${salt}:${scryptSync(password, salt, 64, { N: 16384, r: 8, p: 1 }).toString('hex')}`;
 }
-const immutable = ['sales','sale_items','payments','expenses','expense_reversals','sale_reversals','sale_return_items','purchases','purchase_items','purchase_receipts','supplier_payments','inventory_movements','reconciliations','documents','journal_entries','journal_lines','audit_logs','price_history','approval_events','idempotency_keys'];
+const immutable = ['purchase_reversals','supplier_refunds','supplier_payment_reversals','reconciliation_adjustments','sales','sale_items','payments','expenses','expense_reversals','sale_reversals','sale_return_items','purchases','purchase_items','purchase_receipts','supplier_payments','inventory_movements','reconciliations','documents','journal_entries','journal_lines','audit_logs','price_history','approval_events','idempotency_keys'];
 export function createDb(path = ':memory:') {
   if (path !== ':memory:') mkdirSync(dirname(resolve(path)), { recursive: true });
   const db = new Database(path);

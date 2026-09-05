@@ -6,7 +6,7 @@ import { mutate } from './mutate.js';
 import { inventoryFor,moveStock,ownSession,costOf } from './stock-engine.js';
 import { newRequest } from './request-engine.js';
 import { productList } from './products.js';
-const supplierSchema=z.object({name:z.string().trim().min(2).max(150),contact:z.string().max(150).default(''),phone:z.string().max(40).default(''),email:z.union([z.literal(''),z.string().email()]).default(''),location:z.string().max(200).default(''),account_ref:z.string().max(100).default(''),payment_terms:z.string().max(200).default(''),notes:z.string().max(2000).default(''),active:z.boolean().default(true),reason:reasonInput}).strict();
+export const supplierSchema=z.object({name:z.string().trim().min(2).max(150),contact:z.string().max(150).default(''),phone:z.string().max(40).default(''),email:z.union([z.literal(''),z.string().email()]).default(''),location:z.string().max(200).default(''),account_ref:z.string().max(100).default(''),payment_terms:z.string().max(200).default(''),notes:z.string().max(2000).default(''),active:z.boolean().default(true),reason:reasonInput}).strict();
 export function saveSupplier(db:DB,a:Actor,input:unknown,supplierId?:string,approvalId:string|null=null) {
   demand(a,'suppliers.write');const b=supplierSchema.parse(input);const original=supplierId?scoped(db,'suppliers',supplierId,a,false):null;
   const {reason,active,...data}=b;const row={...data,active:active?1:0};const rid=supplierId??id('sup_');
@@ -19,7 +19,8 @@ const purchaseSchema=z.object({supplier_id:z.string(),invoice_ref:z.string().tri
   items:z.array(z.object({product_id:z.string(),quantity:quantityInput,cost:moneyInput}).strict()).min(1).max(100),reason:reasonInput,
 }).strict();
 export function recordSupplierPayment(db:DB,a:Actor,purchase:Row,input:{amount:string;method:'Cash'|'M-Pesa'|'Card'|'Bank';reference:string},approvalId:string|null=null) {
-  const paid=one(db,'SELECT COALESCE(SUM(amount_cents),0) n FROM supplier_payments WHERE purchase_id=?',purchase.id)!.n;
+  requireThat(!one(db,'SELECT id FROM purchase_reversals WHERE purchase_id=?',purchase.id),'A reversed purchase cannot receive another payment.');
+  const paid=one(db,'SELECT COALESCE(SUM(amount_cents),0) n FROM supplier_payments WHERE purchase_id=?',purchase.id)!.n-one(db,'SELECT COALESCE(SUM(amount_cents),0) n FROM supplier_payment_reversals WHERE purchase_id=?',purchase.id)!.n;
   const value=cents(input.amount);requireThat(value>0&&paid+value<=purchase.total_cents,'Payment exceeds the outstanding supplier balance.');
   requireThat(one(db,'SELECT id FROM purchase_receipts WHERE purchase_id=?',purchase.id),'Approve receipt of the purchase before paying it.');
   const session=input.method==='Cash'?ownSession(db,a):null;
@@ -33,7 +34,9 @@ export function availableCash(db:DB,sessionId:string) {
   return s.opening_cents+one(db,"SELECT COALESCE(SUM(amount_cents),0) n FROM payments WHERE session_id=? AND method='Cash'",sessionId)!.n
     -one(db,"SELECT COALESCE(SUM(amount_cents),0) n FROM expenses WHERE session_id=? AND method='Cash'",sessionId)!.n
     +one(db,"SELECT COALESCE(SUM(amount_cents),0) n FROM expense_reversals WHERE session_id=? AND method='Cash'",sessionId)!.n
-    -one(db,"SELECT COALESCE(SUM(amount_cents),0) n FROM supplier_payments WHERE session_id=? AND method='Cash'",sessionId)!.n;
+    -one(db,"SELECT COALESCE(SUM(amount_cents),0) n FROM supplier_payments WHERE session_id=? AND method='Cash'",sessionId)!.n
+    +one(db,"SELECT COALESCE(SUM(amount_cents),0) n FROM supplier_refunds WHERE session_id=? AND method='Cash'",sessionId)!.n
+    +one(db,"SELECT COALESCE(SUM(amount_cents),0) n FROM supplier_payment_reversals WHERE session_id=? AND method='Cash'",sessionId)!.n;
 }
 export function postPurchase(db:DB,a:Actor,purchaseId:string,approvalId:string|null=null) {
   demand(a,'inventory.post');const purchase=scoped(db,'purchases',purchaseId,a);
@@ -102,8 +105,8 @@ export function installInventory(app:Express,db:DB) {
   app.get('/api/suppliers',protect('suppliers.read'),(req,res)=>res.json({suppliers:all(db,'SELECT s.*,(SELECT COUNT(*) FROM products p WHERE p.supplier_id=s.id) product_count FROM suppliers s WHERE s.business_id=? ORDER BY s.name',req.actor.business_id)}));
   app.post('/api/suppliers',protect('suppliers.write'),(req,res)=>res.status(201).json(mutate(db,req,()=>saveSupplier(db,req.actor,req.body))));
   app.patch('/api/suppliers/:id',protect('suppliers.write'),(req,res)=>res.json(mutate(db,req,()=>saveSupplier(db,req.actor,req.body,String(req.params.id)))));
-  app.get('/api/purchases',protect('inventory.receive'),(req,res)=>res.json({purchases:all(db,`SELECT p.*,u.name staff_name,CASE WHEN pr.id IS NOT NULL THEN 'posted' ELSE COALESCE(ar.status,'pending') END status,
-    (SELECT COALESCE(SUM(amount_cents),0) FROM supplier_payments WHERE purchase_id=p.id) paid_cents,
+  app.get('/api/purchases',protect('inventory.receive'),(req,res)=>res.json({purchases:all(db,`SELECT p.*,u.name staff_name,CASE WHEN EXISTS(SELECT 1 FROM purchase_reversals WHERE purchase_id=p.id) THEN 'reversed' WHEN pr.id IS NOT NULL THEN 'posted' ELSE COALESCE(ar.status,'pending') END status,
+    ((SELECT COALESCE(SUM(amount_cents),0) FROM supplier_payments WHERE purchase_id=p.id)-(SELECT COALESCE(SUM(amount_cents),0) FROM supplier_payment_reversals WHERE purchase_id=p.id)-(SELECT COALESCE(SUM(amount_cents),0) FROM supplier_refunds WHERE purchase_id=p.id)) paid_cents,
     (SELECT COUNT(*) FROM purchase_items WHERE purchase_id=p.id) item_count FROM purchases p JOIN users u ON u.id=p.user_id
     LEFT JOIN purchase_receipts pr ON pr.purchase_id=p.id LEFT JOIN approval_requests ar ON ar.entity_id=p.id AND ar.kind='stock_receipt'
     WHERE p.business_id=? AND p.branch_id=? ORDER BY p.created_at DESC LIMIT 2000`,req.actor.business_id,req.actor.branch_id)}));
