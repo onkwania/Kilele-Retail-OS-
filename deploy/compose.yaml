@@ -1,0 +1,53 @@
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PREVIEW_MODE: 'false'
+      PORT: '3001'
+      DATABASE_PATH: /app/data/production.sqlite
+      APP_ORIGIN: https://${PUBLIC_HOST:?Set PUBLIC_HOST to your real HTTPS hostname}
+      # Safe only because the app is private and Caddy is the single public ingress.
+      TRUST_PROXY: '1'
+    expose:
+      - '3001'
+    volumes:
+      - retail_data:/app/data
+    networks:
+      - private
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+  gateway:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST:?Set PUBLIC_HOST}
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - private
+      - public
+    depends_on:
+      app:
+        condition: service_healthy
+volumes:
+  retail_data:
+  caddy_data:
+  caddy_config:
+networks:
+  private:
+    internal: true
+  public:

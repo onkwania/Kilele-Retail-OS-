@@ -1,11 +1,85 @@
-import {describe,it,expect,afterEach} from 'vitest';
-import {fixture,addUser} from './helpers.js';
-import {createPurchase,saveSupplier,openingStock,stockRequest,applyStockRequest,postPurchase} from '../server/inventory.js';
-import {all,one,integrity,kenyaDate,type DB} from '../server/core.js';
-let db:DB;afterEach(()=>db?.close());
-describe('Controlled inventory and purchasing',()=>{
- it('records a supplier purchase, raises inventory and maintains weighted average cost',()=>{const f=fixture();db=f.db;const supplier=saveSupplier(db,f.a,{name:'Fixture supplier',reason:'Test supplier setup'});const result=db.transaction(()=>createPurchase(db,f.a,{supplier_id:supplier.id,invoice_ref:'TEST-INV-1',purchase_date:kenyaDate(),payment_method:'Credit',items:[{product_id:f.p.id,quantity:10,cost:'200'}],reason:'Test receiving stock'}))();expect(result.status).toBe('posted');expect(one(db,'SELECT quantity,value_cents FROM inventory WHERE product_id=?',f.p.id)).toMatchObject({quantity:30,value_cents:400000});expect(integrity(db).ok).toBe(true);expect(()=>db.prepare('DELETE FROM purchases').run()).toThrow(/immutable/);});
- it('holds staff stock receiving until an authorised reviewer posts it',()=>{const f=fixture();db=f.db;const staff=addUser(db,f.a,'accountant');const supplier=saveSupplier(db,f.a,{name:'Fixture supplier',reason:'Test supplier setup'});const result=db.transaction(()=>createPurchase(db,staff,{supplier_id:supplier.id,invoice_ref:'TEST-INV-2',purchase_date:kenyaDate(),payment_method:'Credit',items:[{product_id:f.p.id,quantity:5,cost:'120'}],reason:'Receive for admin approval'}))();expect(result.status).toBe('pending');expect(one(db,'SELECT quantity FROM inventory WHERE product_id=?',f.p.id)!.quantity).toBe(20);expect(()=>postPurchase(db,staff,result.id)).toThrow(/permission/);expect(all(db,"SELECT * FROM approval_requests WHERE kind='stock_receipt'")).toHaveLength(1);});
- it('rejects repeated opening stock and direct balance changes',()=>{const f=fixture();db=f.db;expect(()=>openingStock(db,f.a,{product_id:f.p.id,quantity:1,reason:'Try opening again'})).toThrow(/first stock movement/);expect(()=>db.prepare('UPDATE inventory SET quantity=999 WHERE product_id=?').run(f.p.id)).toThrow(/ledger/);});
- it('protects stock counts from concurrent stock changes',()=>{const f=fixture();db=f.db;const request=stockRequest(db,f.a,{product_id:f.p.id,kind:'stock_count',quantity:18,reason:'Physical stock count'});const r=one(db,'SELECT * FROM approval_requests WHERE id=?',request.id)!;expect(JSON.parse(r.payload_json).delta).toBe(-2);const bad={...r,payload_json:JSON.stringify({...JSON.parse(r.payload_json),expected_inventory_version:999})};expect(()=>applyStockRequest(db,f.a,bad)).toThrow(/Stock changed/);expect(integrity(db).ok).toBe(true);});
+import { describe, it, expect, afterEach } from 'vitest';
+import { fixture, addUser } from './helpers.js';
+import {
+  createPurchase,
+  saveSupplier,
+  openingStock,
+  stockRequest,
+  applyStockRequest,
+  postPurchase,
+} from '../server/inventory.js';
+import { all, one, integrity, kenyaDate, type DB } from '../server/core.js';
+let db: DB;
+afterEach(() => db?.close());
+describe('Controlled inventory and purchasing', () => {
+  it('records a supplier purchase, raises inventory and maintains weighted average cost', () => {
+    const f = fixture();
+    db = f.db;
+    const supplier = saveSupplier(db, f.a, { name: 'Fixture supplier', reason: 'Test supplier setup' });
+    const result = db.transaction(() =>
+      createPurchase(db, f.a, {
+        supplier_id: supplier.id,
+        invoice_ref: 'TEST-INV-1',
+        purchase_date: kenyaDate(),
+        payment_method: 'Credit',
+        items: [{ product_id: f.p.id, quantity: 10, cost: '200' }],
+        reason: 'Test receiving stock',
+      }),
+    )();
+    expect(result.status).toBe('posted');
+    expect(one(db, 'SELECT quantity,value_cents FROM inventory WHERE product_id=?', f.p.id)).toMatchObject({
+      quantity: 30,
+      value_cents: 400000,
+    });
+    expect(integrity(db).ok).toBe(true);
+    expect(() => db.prepare('DELETE FROM purchases').run()).toThrow(/immutable/);
+  });
+  it('holds staff stock receiving until an authorised reviewer posts it', () => {
+    const f = fixture();
+    db = f.db;
+    const staff = addUser(db, f.a, 'accountant');
+    const supplier = saveSupplier(db, f.a, { name: 'Fixture supplier', reason: 'Test supplier setup' });
+    const result = db.transaction(() =>
+      createPurchase(db, staff, {
+        supplier_id: supplier.id,
+        invoice_ref: 'TEST-INV-2',
+        purchase_date: kenyaDate(),
+        payment_method: 'Credit',
+        items: [{ product_id: f.p.id, quantity: 5, cost: '120' }],
+        reason: 'Receive for admin approval',
+      }),
+    )();
+    expect(result.status).toBe('pending');
+    expect(one(db, 'SELECT quantity FROM inventory WHERE product_id=?', f.p.id)!.quantity).toBe(20);
+    expect(() => postPurchase(db, staff, result.id)).toThrow(/permission/);
+    expect(all(db, "SELECT * FROM approval_requests WHERE kind='stock_receipt'")).toHaveLength(1);
+  });
+  it('rejects repeated opening stock and direct balance changes', () => {
+    const f = fixture();
+    db = f.db;
+    expect(() =>
+      openingStock(db, f.a, { product_id: f.p.id, quantity: 1, reason: 'Try opening again' }),
+    ).toThrow(/first stock movement/);
+    expect(() => db.prepare('UPDATE inventory SET quantity=999 WHERE product_id=?').run(f.p.id)).toThrow(
+      /ledger/,
+    );
+  });
+  it('protects stock counts from concurrent stock changes', () => {
+    const f = fixture();
+    db = f.db;
+    const request = stockRequest(db, f.a, {
+      product_id: f.p.id,
+      kind: 'stock_count',
+      quantity: 18,
+      reason: 'Physical stock count',
+    });
+    const r = one(db, 'SELECT * FROM approval_requests WHERE id=?', request.id)!;
+    expect(JSON.parse(r.payload_json).delta).toBe(-2);
+    const bad = {
+      ...r,
+      payload_json: JSON.stringify({ ...JSON.parse(r.payload_json), expected_inventory_version: 999 }),
+    };
+    expect(() => applyStockRequest(db, f.a, bad)).toThrow(/Stock changed/);
+    expect(integrity(db).ok).toBe(true);
+  });
 });

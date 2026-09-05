@@ -13,3 +13,7 @@ test-results/
 .npm/
 .local/
 .arena/
+
+.sudo_as_admin_successful
+
+/kilele-retail-os-source.zip

@@ -1,4 +1,5 @@
 PRAGMA foreign_keys = ON;
+CREATE TABLE IF NOT EXISTS environment_markers(kind TEXT PRIMARY KEY CHECK(kind IN ('preview','operational')),created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS businesses (
  id TEXT PRIMARY KEY, name TEXT NOT NULL, currency TEXT NOT NULL DEFAULT 'KES' CHECK(currency='KES'),

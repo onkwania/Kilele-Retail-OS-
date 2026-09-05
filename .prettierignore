@@ -1,0 +1,12 @@
+node_modules
+dist
+data
+.cache
+.npm
+.local
+.arena
+.git
+playwright-report
+test-results
+package-lock.json
+*.csv
