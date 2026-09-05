@@ -29,10 +29,10 @@ Use numbers without currency symbols or thousands separators. Leave optional pri
 
 - **Opening stock** is an administrator-only, one-time quantity entry before a product’s first movement in the branch. It uses the manually entered buying price and posts opening equity.
 - Thereafter, receive supplier deliveries through **Purchases**. Choose supplier, invoice/date, package quantities and the actual unit valuation costs. Do not enter resale stock as an operating expense.
-- An administrator can post receiving. Accountant/inventory staff submissions wait for independent approval and do not change stock until approved.
+- An administrator can post normal receiving. A linked replacement of rejected/reversed receiving always needs another administrator’s review, even when entered by an administrator. Accountant/inventory staff submissions wait for independent approval and do not change stock until approved.
 - Receiving debits Inventory and credits Accounts payable. Supplier settlement is separate. Choose **Credit** when a payment still needs to be made or its actual transfer reference needs to be recorded separately.
-- Immediate-payment receiving uses the invoice reference as its settlement reference. For M-Pesa/card/bank traceability, the recommended workflow is credit receiving followed by a separately confirmed settlement with its provider reference.
-- Inventory uses moving weighted-average cost. Quantities are derived from movements, not editable stock fields.
+- Immediate electronic receiving requires the actual provider reference; the software no longer substitutes an invoice number. Credit receiving followed by a confirmed settlement remains supported. A transfer reference must identify the real unique provider transaction, not a reusable short terminal approval code. Supplier batch allocation across multiple invoices needs a separately designed allocation workflow.
+- Inventory uses moving weighted-average cost. Enter unit valuation costs excluding recoverable VAT and, only if confirmed deductible by your accountant, enter the separate invoice Input VAT amount. Payable and tender totals include that claim; inventory does not. Zero means no claim has been recorded, not that the transaction is legally exempt. Quantities are derived from movements, not editable stock fields.
 
 ### Counts, damage and wastage
 
@@ -61,11 +61,13 @@ The POS preserves the original intent and key. After reconnecting or reloading, 
 - To abandon an unposted request, supply a cancellation reason. Cancellation reserves the original key atomically, so a delayed request cannot later post. If it had already posted, the existing receipt opens instead.
 - Cancelling software does **not** return funds taken outside the application. Reconcile any money already received.
 
-Other mutations also retain their exact-body submission keys after network/server uncertainty. Retry the same entry, inspect its existing ledger/history first, and seek an administrator’s help rather than changing a possibly posted entry. Do not clear browser storage as a way to resolve an uncertain submission.
+The same **Resolve saved entry** workflow is now available for expenses, purchases, supplier payments, stock/session entries and approval actions. Resolve it before starting a different financial posting. Legacy pending keys without a saved body can be checked and atomically cancelled if unposted; never discard an unknown outcome. Resolve pending submissions before changing a user’s branch/permissions or handing over the browser. Do not clear browser storage as a way to resolve an uncertain submission.
 
 ## 5. Expenses and supplier payments
 
 Enter date, category, amount, payment method, payee/reference and description; attach a receipt where available. Expenses post on entry. The original receipt date is stored separately from the accounting posting time.
+
+Expense amount is the gross amount paid. If your accountant has verified an input-VAT claim, record it separately: the journal splits net expense and Input VAT while the drawer moves by the full gross amount. The application does not decide tax deductibility.
 
 Cash expenses and cash supplier settlements consume the operator’s live drawer; insufficient expected cash is refused. Electronic entries are manually confirmed records. Submitted expenses and supplier settlements cannot be edited or deleted afterwards. Use **Request correction** and attach the original evidence.
 
@@ -106,8 +108,18 @@ Refunds and expense/payment reversals need a physically appropriate live registe
 
 Use dashboard dates or **Reports** to select supported date/staff/product/category/brand/supplier/payment filters. Unsupported filters are rejected rather than ignored. Exports are limited to 50,000 projected rows; narrow the date range if required. Preview shows up to 500 rows.
 
-Revenue excludes configured output tax; COGS comes from sale snapshots. Refunds appear on their posting date. A payment-method filter on sales/profit selects complete transactions containing that tender; use **Payment reconciliation** for exact tender/refund amounts.
+Revenue excludes configured output tax; COGS comes from sale snapshots. Refunds appear on their posting date. A payment-method filter on sales/profit selects complete transactions containing that tender; use **Payment reconciliation** for recorded operating inflows/outflows, including expense/supplier reversals and approved cash variance. This report excludes opening drawer counts and is not a provider statement. Purchases show net inventory costs; unfiltered invoice totals/Input VAT appear once per invoice rather than being guessed or allocated across product-filtered lines.
 
 Inventory reports reconstruct historical closing quantity/value from movements. Operational staff metrics are for contextual human review, **never automatic accusations of theft or misconduct**.
 
 Audit entries, price history and posted ledger rows have no normal delete/edit controls. The application’s audit verification detects chain inconsistency; trusted filesystem/database administrators remain outside the application’s permission boundary.
+
+## Receiving errors without invented invoice numbers
+
+Reject an incorrect pending receipt first, or approve the appropriate reversal of an already received purchase. In **Purchase details**, choose **Create linked replacement**. Correct the actual quantities/costs/reference and explain the change; the same genuine invoice number can be retained. The original remains intact. A different administrator must approve the replacement. Use the latest replacement in a chain, not an earlier ancestor. Duplicate active supplier invoices are refused.
+
+## Printing and scanning
+
+Choose 58 mm, 80 mm or A4 in the receipt dialog. New receipts retain merchant/PIN/branch/register identity as recorded at the sale. Legacy receipts explicitly disclose that a historical identity snapshot was unavailable. No layout is an eTIMS fiscal invoice.
+
+Additional owner-verified barcode aliases can be maintained in Products. Metadata-only edits preserve existing codes and unrelated fields. An ambiguous scan must be selected manually, never guessed. Physical hardware remains subject to [HARDWARE_ACCEPTANCE.md](HARDWARE_ACCEPTANCE.md).

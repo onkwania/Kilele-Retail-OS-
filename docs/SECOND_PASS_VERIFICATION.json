@@ -1,0 +1,289 @@
+{
+  "baseline_commit": "1731254",
+  "recorded_at": "2026-09-05T15:35:55.363541+00:00",
+  "baseline": [
+    {
+      "command": "npm run test",
+      "exit_code": 0,
+      "started_at": "2026-09-05T13:48:26.675749+00:00",
+      "finished_at": "2026-09-05T13:48:38.434981+00:00",
+      "log": ".cache/second-pass/baseline-1.log"
+    },
+    {
+      "command": "npm run typecheck",
+      "exit_code": 0,
+      "started_at": "2026-09-05T13:48:38.435146+00:00",
+      "finished_at": "2026-09-05T13:48:47.457263+00:00",
+      "log": ".cache/second-pass/baseline-2.log"
+    },
+    {
+      "command": "npm run lint",
+      "exit_code": 0,
+      "started_at": "2026-09-05T13:48:47.457411+00:00",
+      "finished_at": "2026-09-05T13:48:51.706083+00:00",
+      "log": ".cache/second-pass/baseline-3.log"
+    },
+    {
+      "command": "npm run build",
+      "exit_code": 0,
+      "started_at": "2026-09-05T13:48:51.706227+00:00",
+      "finished_at": "2026-09-05T13:49:01.446402+00:00",
+      "log": ".cache/second-pass/baseline-4.log"
+    },
+    {
+      "command": "npm run verify",
+      "exit_code": 0,
+      "started_at": "2026-09-05T13:49:01.446774+00:00",
+      "finished_at": "2026-09-05T13:49:35.913341+00:00",
+      "log": ".cache/second-pass/baseline-5.log"
+    },
+    {
+      "command": "npm run db:check",
+      "exit_code": 0,
+      "started_at": "2026-09-05T13:49:35.913511+00:00",
+      "finished_at": "2026-09-05T13:49:36.482624+00:00",
+      "log": ".cache/second-pass/baseline-6.log"
+    },
+    {
+      "command": "npm run test:e2e",
+      "exit_code": 0,
+      "started_at": "2026-09-05T13:49:36.482775+00:00",
+      "finished_at": "2026-09-05T13:50:26.565267+00:00",
+      "log": ".cache/second-pass/baseline-7.log"
+    },
+    {
+      "command": "npm audit --omit=dev",
+      "exit_code": 0,
+      "started_at": "2026-09-05T13:50:26.566885+00:00",
+      "finished_at": "2026-09-05T13:50:27.673999+00:00",
+      "log": ".cache/second-pass/baseline-8.log"
+    }
+  ],
+  "final": [
+    {
+      "command": "npm ci",
+      "exit_code": 0,
+      "started_at": "2026-09-05T15:22:54.326750+00:00",
+      "finished_at": "2026-09-05T15:24:27.258005+00:00",
+      "log": ".cache/second-pass/final-1.log",
+      "attempts": [
+        {
+          "exit_code": 0,
+          "log": ".cache/second-pass/final-1.log"
+        }
+      ]
+    },
+    {
+      "command": "npm run test",
+      "exit_code": 0,
+      "started_at": "2026-09-05T15:24:27.258205+00:00",
+      "finished_at": "2026-09-05T15:43:14.059915+00:00",
+      "log": ".cache/second-pass/final-2.log",
+      "attempts": [
+        {
+          "exit_code": 0,
+          "log": ".cache/second-pass/final-2.log"
+        },
+        {
+          "exit_code": 0,
+          "log": ".cache/second-pass/release-verify.log",
+          "finished_at": "2026-09-05T15:43:14.059915+00:00"
+        }
+      ]
+    },
+    {
+      "command": "npm run typecheck",
+      "exit_code": 0,
+      "started_at": "2026-09-05T15:25:50.132172+00:00",
+      "finished_at": "2026-09-05T15:43:14.059915+00:00",
+      "log": ".cache/second-pass/final-3.log",
+      "attempts": [
+        {
+          "exit_code": 0,
+          "log": ".cache/second-pass/final-3.log"
+        },
+        {
+          "exit_code": 0,
+          "log": ".cache/second-pass/release-verify.log",
+          "finished_at": "2026-09-05T15:43:14.059915+00:00"
+        }
+      ]
+    },
+    {
+      "command": "npm run lint",
+      "exit_code": 0,
+      "started_at": "2026-09-05T15:25:59.240912+00:00",
+      "finished_at": "2026-09-05T15:43:14.059915+00:00",
+      "log": ".cache/second-pass/final-4.log",
+      "attempts": [
+        {
+          "exit_code": 1,
+          "log": ".cache/second-pass/final-4.log"
+        },
+        {
+          "exit_code": 0,
+          "log": ".cache/second-pass/final-verify-rerun.log"
+        },
+        {
+          "exit_code": 0,
+          "log": ".cache/second-pass/release-verify.log",
+          "finished_at": "2026-09-05T15:43:14.059915+00:00"
+        }
+      ],
+      "resolved": "Removed unused imports from the new API regression test; lint and the complete verify chain re-executed successfully."
+    },
+    {
+      "command": "npm run build",
+      "exit_code": 0,
+      "started_at": "2026-09-05T15:26:03.890597+00:00",
+      "finished_at": "2026-09-05T15:43:14.059915+00:00",
+      "log": ".cache/second-pass/final-5.log",
+      "attempts": [
+        {
+          "exit_code": 0,
+          "log": ".cache/second-pass/final-5.log"
+        },
+        {
+          "exit_code": 0,
+          "log": ".cache/second-pass/release-verify.log",
+          "finished_at": "2026-09-05T15:43:14.059915+00:00"
+        }
+      ]
+    },
+    {
+      "command": "npm run verify",
+      "exit_code": 0,
+      "started_at": "2026-09-05T15:26:13.832611+00:00",
+      "finished_at": "2026-09-05T15:43:14.059915+00:00",
+      "log": ".cache/second-pass/final-6.log",
+      "attempts": [
+        {
+          "exit_code": 1,
+          "log": ".cache/second-pass/final-6.log"
+        },
+        {
+          "exit_code": 0,
+          "log": ".cache/second-pass/final-verify-rerun.log"
+        },
+        {
+          "exit_code": 0,
+          "log": ".cache/second-pass/release-verify.log",
+          "finished_at": "2026-09-05T15:43:14.059915+00:00"
+        }
+      ],
+      "resolved": "Removed unused imports from the new API regression test; lint and the complete verify chain re-executed successfully."
+    },
+    {
+      "command": "npm run db:check",
+      "exit_code": 0,
+      "started_at": "2026-09-05T15:27:49.331960+00:00",
+      "finished_at": "2026-09-05T15:43:14.059915+00:00",
+      "log": ".cache/second-pass/final-7.log",
+      "attempts": [
+        {
+          "exit_code": 0,
+          "log": ".cache/second-pass/final-7.log"
+        },
+        {
+          "exit_code": 0,
+          "log": ".cache/second-pass/release-verify.log",
+          "finished_at": "2026-09-05T15:43:14.059915+00:00"
+        }
+      ]
+    },
+    {
+      "command": "npm run test:e2e",
+      "exit_code": 0,
+      "started_at": "2026-09-05T15:27:49.871921+00:00",
+      "finished_at": "2026-09-05T15:44:25.135915+00:00",
+      "log": ".cache/second-pass/final-8.log",
+      "attempts": [
+        {
+          "exit_code": 0,
+          "log": ".cache/second-pass/final-8.log"
+        },
+        {
+          "exit_code": 0,
+          "log": ".cache/second-pass/release-e2e.log"
+        }
+      ]
+    },
+    {
+      "command": "npm audit --omit=dev",
+      "exit_code": 0,
+      "started_at": "2026-09-05T15:29:03.825083+00:00",
+      "finished_at": "2026-09-05T15:29:04.680428+00:00",
+      "log": ".cache/second-pass/final-9.log",
+      "attempts": [
+        {
+          "exit_code": 0,
+          "log": ".cache/second-pass/final-9.log"
+        }
+      ]
+    }
+  ],
+  "automated_tests": 86,
+  "test_files": 18,
+  "browser_scenarios": 8,
+  "runtime_dependency_advisories": 0,
+  "main_migration": {
+    "checked_at": "2026-09-05T15:22:54.181Z",
+    "original_tables": 44,
+    "all_pre_existing_fields_preserved": true,
+    "original_rows_digest": "cd7d0fb7efdef2ee7f2277c757af8bb68eb66888dd785bc0bc8ea3a61979cac3",
+    "schema_versions": [1, 2, 3],
+    "integrity": {
+      "ok": true,
+      "errors": [],
+      "auditEvents": 18,
+      "checkedAt": "2026-09-05T15:22:54.181Z",
+      "scope": "database"
+    },
+    "catalogue": {
+      "products": 140,
+      "priced": 0
+    },
+    "stock": {
+      "units": 0
+    }
+  },
+  "limitations": [
+    "No KRA/eTIMS certification or external fiscal workflow acceptance",
+    "No live payment provider credentials or transaction confirmation",
+    "No physical scanner/printer/drawer acceptance",
+    "No Docker/cloud rollout or off-site backup configuration in this workspace"
+  ],
+  "final_verified_at": "2026-09-05T15:44:26Z",
+  "preservation": {
+    "checked_at": "2026-09-05T15:44:26.098Z",
+    "tables": 42,
+    "original_rows_retained": 501,
+    "original_fields_preserved": true,
+    "excluded_ephemeral_tables": ["auth_sessions", "login_attempts", "schema_migrations"],
+    "master_prices": {
+      "products": 140,
+      "configured": 0
+    },
+    "stock": {
+      "units": 0
+    },
+    "financial_counts": {
+      "sales": 0,
+      "expenses": 0,
+      "purchases": 0,
+      "payments": 0,
+      "inventory_movements": 0,
+      "journal_entries": 0
+    },
+    "backup_verified": true,
+    "restore_verified": true
+  },
+  "format_check": "Passed after reformatting the new recovery test",
+  "live_preview": {
+    "desktop_rendered": true,
+    "mobile_viewport": 390,
+    "mobile_document_width": 390,
+    "page_errors": 0
+  },
+  "reviewed_code_sha256": "e2893c858de552c7961ae36f271276dfbb98b01ecc81b0140e390b64f13423d4"
+}

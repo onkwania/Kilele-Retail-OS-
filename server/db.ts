@@ -1,13 +1,15 @@
 import Database from 'better-sqlite3';
+import { migrateExisting, needsMigration } from './migrations.js';
 import { readFileSync, mkdirSync, existsSync, writeFileSync, chmodSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { scryptSync, randomBytes } from 'node:crypto';
 import { all, audit, id, insert, now, one, type DB, type Actor } from './core.js';
 import { PERMISSIONS, ROLE_NAMES, ROLE_PERMISSIONS } from './permissions.js';
 
+export const SCRYPT_OPTIONS = { N: 131072, r: 8, p: 1, maxmem: 256 * 1024 * 1024 };
 export function hashPassword(password: string) {
   const salt = randomBytes(16).toString('hex');
-  return `${salt}:${scryptSync(password, salt, 64, { N: 16384, r: 8, p: 1 }).toString('hex')}`;
+  return `scrypt-v2:${salt}:${scryptSync(password, salt, 64, SCRYPT_OPTIONS).toString('hex')}`;
 }
 const immutable = [
   'environment_markers',
@@ -46,25 +48,37 @@ export function createDb(path = ':memory:') {
   }
   const db = new Database(path);
   db.pragma('foreign_keys = ON');
+  db.pragma('recursive_triggers = ON'); // REPLACE must not evade immutable DELETE guards.
   db.pragma('journal_mode = WAL');
   db.pragma('synchronous = FULL');
   db.pragma('busy_timeout = 5000');
-  db.exec(readFileSync(resolve('server/schema.sql'), 'utf8'));
-  if (!all(db, 'PRAGMA table_info(documents)').some((c) => c.name === 'purpose'))
-    db.exec("ALTER TABLE documents ADD COLUMN purpose TEXT NOT NULL DEFAULT 'request'");
-  for (const table of immutable) {
-    for (const op of ['UPDATE', 'DELETE'])
-      db.exec(
-        `CREATE TRIGGER IF NOT EXISTS immutable_${table}_${op.toLowerCase()} BEFORE ${op} ON ${table} BEGIN SELECT RAISE(ABORT, '${table} records are immutable; request a correction'); END;`,
-      );
-  }
-  db.exec(`CREATE TRIGGER IF NOT EXISTS movement_matches_inventory BEFORE INSERT ON inventory_movements
+  const schema = readFileSync(resolve('server/schema.sql'), 'utf8');
+  const migrating = needsMigration(db);
+  if (migrating) db.pragma('foreign_keys=OFF');
+  try {
+    db.transaction(() => {
+      migrateExisting(db, schema);
+      db.exec(schema);
+      for (const table of ['purchases', 'expenses'])
+        if (!all(db, `PRAGMA table_info(${table})`).some((c) => c.name === 'input_tax_cents'))
+          db.exec(
+            `ALTER TABLE ${table} ADD COLUMN input_tax_cents INTEGER NOT NULL DEFAULT 0 CHECK(input_tax_cents>=0)`,
+          );
+      if (!all(db, 'PRAGMA table_info(documents)').some((c) => c.name === 'purpose'))
+        db.exec("ALTER TABLE documents ADD COLUMN purpose TEXT NOT NULL DEFAULT 'request'");
+      for (const table of immutable) {
+        for (const op of ['UPDATE', 'DELETE'])
+          db.exec(
+            `CREATE TRIGGER IF NOT EXISTS immutable_${table}_${op.toLowerCase()} BEFORE ${op} ON ${table} BEGIN SELECT RAISE(ABORT, '${table} records are immutable; request a correction'); END;`,
+          );
+      }
+      db.exec(`CREATE TRIGGER IF NOT EXISTS movement_matches_inventory BEFORE INSERT ON inventory_movements
     WHEN NOT EXISTS(SELECT 1 FROM inventory WHERE business_id=NEW.business_id AND branch_id=NEW.branch_id AND product_id=NEW.product_id AND quantity=NEW.previous_qty AND value_cents=NEW.previous_value_cents)
     BEGIN SELECT RAISE(ABORT,'Stock changed; reload before posting'); END;
     CREATE TRIGGER IF NOT EXISTS movement_updates_inventory AFTER INSERT ON inventory_movements
     BEGIN UPDATE inventory SET quantity=NEW.new_qty, value_cents=NEW.new_value_cents, version=version+1
     WHERE business_id=NEW.business_id AND branch_id=NEW.branch_id AND product_id=NEW.product_id; END;`);
-  db.exec(`CREATE TRIGGER IF NOT EXISTS product_price_guard BEFORE UPDATE ON products
+      db.exec(`CREATE TRIGGER IF NOT EXISTS product_price_guard BEFORE UPDATE ON products
     WHEN (NEW.cost_cents IS NOT OLD.cost_cents OR NEW.selling_cents IS NOT OLD.selling_cents OR NEW.wholesale_cents IS NOT OLD.wholesale_cents OR NEW.promo_cents IS NOT OLD.promo_cents OR NEW.tax_mode<>OLD.tax_mode OR NEW.tax_bps<>OLD.tax_bps)
     AND NOT EXISTS(SELECT 1 FROM price_history h WHERE h.product_id=OLD.id
       AND json_extract(h.previous_json,'$.cost_cents') IS OLD.cost_cents AND json_extract(h.next_json,'$.cost_cents') IS NEW.cost_cents
@@ -75,31 +89,43 @@ export function createDb(path = ':memory:') {
       AND json_extract(h.previous_json,'$.tax_bps') IS OLD.tax_bps AND json_extract(h.next_json,'$.tax_bps') IS NEW.tax_bps
       AND h.rowid=(SELECT MAX(rowid) FROM price_history WHERE product_id=OLD.id))
     BEGIN SELECT RAISE(ABORT,'Price changes require a matching immutable price history'); END;`);
-  // Guard future code paths as well as current validators: currency, counts and flags remain integers in SQLite.
-  for (const table of all(
-    db,
-    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
-  )) {
-    const columns = all(db, `PRAGMA table_info(${table.name})`).filter((c) => c.type === 'INTEGER');
-    if (!columns.length) continue;
-    const invalid = columns
-      .map((c) => `(NEW.${c.name} IS NOT NULL AND typeof(NEW.${c.name})<>'integer')`)
-      .join(' OR ');
-    for (const operation of ['INSERT', 'UPDATE'])
-      db.exec(
-        `CREATE TRIGGER IF NOT EXISTS integer_${table.name}_${operation.toLowerCase()} BEFORE ${operation} ON ${table.name} WHEN ${invalid} BEGIN SELECT RAISE(ABORT,'Integer minor units and quantities are required'); END;`,
-      );
+      // Guard future code paths as well as current validators: currency, counts and flags remain integers in SQLite.
+      for (const table of all(
+        db,
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+      )) {
+        const columns = all(db, `PRAGMA table_info(${table.name})`).filter((c) => c.type === 'INTEGER');
+        if (!columns.length) continue;
+        const invalid = columns
+          .map((c) => `(NEW.${c.name} IS NOT NULL AND typeof(NEW.${c.name})<>'integer')`)
+          .join(' OR ');
+        for (const operation of ['INSERT', 'UPDATE']) {
+          db.exec(`DROP TRIGGER IF EXISTS integer_${table.name}_${operation.toLowerCase()}`);
+          db.exec(
+            `CREATE TRIGGER IF NOT EXISTS integer_${table.name}_${operation.toLowerCase()} BEFORE ${operation} ON ${table.name} WHEN ${invalid} BEGIN SELECT RAISE(ABORT,'Integer minor units and quantities are required'); END;`,
+          );
+        }
+      }
+      db.transaction(() => {
+        for (const [key, description] of Object.entries(PERMISSIONS))
+          db.prepare('INSERT OR IGNORE INTO permissions VALUES(?,?)').run(key, description);
+        for (const [key, name] of Object.entries(ROLE_NAMES)) {
+          db.prepare('INSERT OR IGNORE INTO roles VALUES(?,?)').run(key, name);
+          for (const perm of ROLE_PERMISSIONS[key])
+            db.prepare('INSERT OR IGNORE INTO role_permissions VALUES(?,?)').run(key, perm);
+        }
+        db.prepare('INSERT OR IGNORE INTO schema_migrations VALUES(1,?)').run(now());
+        db.prepare('INSERT OR IGNORE INTO schema_migrations VALUES(2,?)').run(now());
+        db.prepare('INSERT OR IGNORE INTO schema_migrations VALUES(3,?)').run(now());
+      })();
+      if (all(db, 'PRAGMA foreign_key_check').length)
+        throw new Error('Database initialisation foreign-key validation failed');
+    }).immediate();
+  } catch (error) {
+    db.close();
+    throw error;
   }
-  db.transaction(() => {
-    for (const [key, description] of Object.entries(PERMISSIONS))
-      db.prepare('INSERT OR IGNORE INTO permissions VALUES(?,?)').run(key, description);
-    for (const [key, name] of Object.entries(ROLE_NAMES)) {
-      db.prepare('INSERT OR IGNORE INTO roles VALUES(?,?)').run(key, name);
-      for (const perm of ROLE_PERMISSIONS[key])
-        db.prepare('INSERT OR IGNORE INTO role_permissions VALUES(?,?)').run(key, perm);
-    }
-    db.prepare('INSERT OR IGNORE INTO schema_migrations VALUES(1,?)').run(now());
-  })();
+  if (migrating) db.pragma('foreign_keys=ON');
   return db;
 }
 export function actorFor(db: DB, userId: string): Actor | null {
@@ -139,7 +165,7 @@ export function bootstrap(
         id: branchId,
         business_id: businessId,
         name: 'Main branch',
-        location: 'Nairobi, Kenya',
+        location: '', // Owner supplies the actual branch location; do not infer an address.
       });
       insert(db, 'users', {
         id: userId,

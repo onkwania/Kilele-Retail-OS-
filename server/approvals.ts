@@ -134,7 +134,14 @@ export function createCorrectionRequest(db: DB, a: Actor, input: unknown) {
     demand(a, 'suppliers.read');
     entity = 'suppliers';
     original = b.entity_id ? scoped(db, entity, b.entity_id, a, false) : null;
-    payload = { supplier: supplierSchema.parse({ ...b.payload, reason: b.reason }) };
+    const base = original
+      ? Object.fromEntries(
+          Object.keys(supplierSchema.shape)
+            .filter((k) => k !== 'reason')
+            .map((k) => [k, k === 'active' ? !!(original as Row).active : (original as Row)[k]]),
+        )
+      : {};
+    payload = { supplier: supplierSchema.parse({ ...base, ...b.payload, reason: b.reason }) };
   } else if (b.kind === 'purchase_reversal') {
     demand(a, 'inventory.receive');
     entity = 'purchases';
@@ -201,19 +208,26 @@ function reverseSale(db: DB, a: Actor, r: Row) {
       'Some of these units were already returned. Submit a new request.',
       409,
     );
+    const cumulativeGross = roundRatio(line.total_cents, cumulative, line.quantity);
+    const refundGross = cumulativeGross - previous.total_cents;
+    const idealTax = roundRatio(line.tax_cents, cumulativeGross, line.total_cents);
+    const minTax = Math.max(previous.tax_cents, line.tax_cents - (line.total_cents - cumulativeGross));
+    const maxTax = Math.min(line.tax_cents, previous.tax_cents + refundGross);
+    const cumulativeTax = Math.max(minTax, Math.min(maxTax, idealTax));
     return {
       sale_item_id: line.id,
       product_id: line.product_id,
       quantity: item.quantity,
-      total_cents: roundRatio(line.total_cents, cumulative, line.quantity) - previous.total_cents,
-      tax_cents: roundRatio(line.tax_cents, cumulative, line.quantity) - previous.tax_cents,
+      total_cents: refundGross,
+      tax_cents: cumulativeTax - previous.tax_cents,
       cogs_cents: roundRatio(line.cogs_cents, cumulative, line.quantity) - previous.cogs_cents,
     };
   });
   const gross = total(lines.map((l) => l.total_cents)),
     tax = total(lines.map((l) => l.tax_cents)),
     cogs = total(lines.map((l) => l.cogs_cents));
-  requireThat(gross > 0, 'This return has no remaining financial value.');
+  // Zero-cent allocations are still physical returns: restore stock/COGS, without a zero payment row.
+  requireThat(gross >= 0 && tax <= gross, 'Invalid cumulative refund allocation.');
   const tenders = all(
       db,
       'SELECT method,SUM(amount_cents) balance FROM payments WHERE sale_id=? GROUP BY method HAVING SUM(amount_cents)>0 ORDER BY method',
@@ -336,7 +350,8 @@ function reverseExpense(db: DB, a: Actor, r: Row) {
     'Approved expense reversal',
     [
       { account: paymentAccount(e.method), debit: e.amount_cents },
-      { account: `Expense: ${e.category}`, credit: e.amount_cents },
+      { account: `Expense: ${e.category}`, credit: e.amount_cents - (e.input_tax_cents ?? 0) },
+      { account: 'Input VAT', credit: e.input_tax_cents ?? 0 },
     ],
     r.id,
   );
@@ -398,7 +413,7 @@ function reversePurchase(db: DB, a: Actor, r: Row) {
       amount_cents: t.amount_cents,
       created_at: now(),
     });
-  const difference = removed - p.total_cents;
+  const difference = removed - (p.total_cents - (p.input_tax_cents ?? 0));
   journal(
     db,
     a,
@@ -408,6 +423,7 @@ function reversePurchase(db: DB, a: Actor, r: Row) {
       { account: 'Accounts payable', debit: p.total_cents - paidTotal },
       ...paid.map((t) => ({ account: paymentAccount(t.method), debit: t.amount_cents })),
       { account: 'Inventory', credit: removed },
+      { account: 'Input VAT', credit: p.input_tax_cents ?? 0 },
       ...(difference > 0
         ? [{ account: 'Inventory adjustments', debit: difference }]
         : [{ account: 'Inventory adjustments', credit: -difference }]),

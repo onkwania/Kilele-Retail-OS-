@@ -1,3 +1,5 @@
+import CheckoutRecovery from './CheckoutRecovery';
+import { financialOperation } from '../../shared/operations';
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
@@ -30,8 +32,8 @@ import {
   MapPin,
 } from 'lucide-react';
 import { useAuth, useQuery } from '../lib/state';
-import { initials, roleName, type Product } from '../lib/api';
-import { Badge, Button, IconButton, Modal, SearchBox } from './ui';
+import { initials, roleName, getPendingSubmissions, type PendingSubmission, type Product } from '../lib/api';
+import { Badge, Button, IconButton, Modal, SearchBox, Notice } from './ui';
 import { PasswordForm } from '../pages/Login';
 export const NAV = [
   { path: '/', label: 'Overview', icon: LayoutDashboard, permission: 'dashboard.read', section: 0 },
@@ -81,6 +83,13 @@ export function Logo() {
   );
 }
 export default function Layout() {
+  const [pendingEntries, setPendingEntries] = useState(getPendingSubmissions),
+    [recoverEntry, setRecoverEntry] = useState<PendingSubmission | null>(null);
+  useEffect(() => {
+    const update = () => setPendingEntries(getPendingSubmissions());
+    window.addEventListener('submission-state-changed', update);
+    return () => window.removeEventListener('submission-state-changed', update);
+  }, []);
   const auth = useAuth(),
     location = useLocation(),
     navigate = useNavigate();
@@ -308,7 +317,38 @@ export default function Layout() {
           </div>
         </header>
         <main className={`main-content ${location.pathname === '/pos' ? 'pos-main' : ''}`}>
+          {pendingEntries.length > 0 &&
+            !(pendingEntries[0].path === '/sales' && location.pathname === '/pos') && (
+              <div className="margin-bottom">
+                <Notice tone="amber">
+                  <strong>A financial submission needs confirmation.</strong> Do not repeat the physical
+                  transaction.{' '}
+                  <button
+                    className="text-button"
+                    onClick={() =>
+                      pendingEntries[0].path === '/sales'
+                        ? navigate('/pos')
+                        : setRecoverEntry(pendingEntries[0])
+                    }
+                  >
+                    Resolve saved entry
+                  </button>
+                </Notice>
+              </div>
+            )}
           <Outlet />
+          {recoverEntry && (
+            <CheckoutRecovery
+              pending={recoverEntry}
+              onClose={() => setRecoverEntry(null)}
+              onCancelled={() => setRecoverEntry(null)}
+              onComplete={() => {
+                const page = financialOperation(recoverEntry.method, recoverEntry.path)?.page;
+                setRecoverEntry(null);
+                if (page) navigate(page);
+              }}
+            />
+          )}
         </main>
         <footer className="app-footer">
           <span>

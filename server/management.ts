@@ -82,7 +82,17 @@ export function saveUser(db: DB, a: Actor, input: unknown, userId?: string) {
       must_change_password: 1,
       created_at: now(),
     });
-  db.prepare('DELETE FROM user_permissions WHERE user_id=?').run(rid);
+  const previousOverrides = all(
+    db,
+    'SELECT permission_id,allowed FROM user_permissions WHERE user_id=?',
+    rid,
+  );
+  // A metadata-only update must not silently remove an explicit permission denial.
+  if (!original || original.role_id !== b.role_id)
+    db.prepare('DELETE FROM user_permissions WHERE user_id=?').run(rid);
+  if (b.role_id === 'accountant' && b.reports_access !== undefined) {
+    db.prepare("DELETE FROM user_permissions WHERE user_id=? AND permission_id='reports.read'").run(rid);
+  }
   if (b.role_id === 'accountant' && b.reports_access !== undefined)
     insert(db, 'user_permissions', {
       user_id: rid,
@@ -90,7 +100,13 @@ export function saveUser(db: DB, a: Actor, input: unknown, userId?: string) {
       allowed: b.reports_access ? 1 : 0,
     });
   const safeOriginal = original
-    ? { name: original.name, email: original.email, role_id: original.role_id, active: original.active }
+    ? {
+        name: original.name,
+        email: original.email,
+        role_id: original.role_id,
+        active: original.active,
+        permission_overrides: previousOverrides,
+      }
     : null;
   audit(
     db,
@@ -99,7 +115,12 @@ export function saveUser(db: DB, a: Actor, input: unknown, userId?: string) {
     'users',
     rid,
     safeOriginal,
-    { ...row, reports_access: b.reports_access, temporary_password: !original },
+    {
+      ...row,
+      reports_access: b.reports_access,
+      effective_permissions: actorFor(db, rid)?.permissions ?? [],
+      temporary_password: !original,
+    },
     b.reason,
   );
   return { ok: true, id: rid };
@@ -250,6 +271,10 @@ export function installManagement(app: Express, db: DB) {
       product: 'products.write',
     }[b.purpose];
     demand(req.actor, permission);
+    requireThat(
+      /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(b.data),
+      'Invalid base64 document encoding.',
+    );
     const buffer = Buffer.from(b.data, 'base64');
     requireThat(
       buffer.length > 0 && buffer.length <= 3_000_000,

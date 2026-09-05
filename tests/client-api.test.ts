@@ -1,5 +1,12 @@
 import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest';
-import { api, setApiActor, getPendingSale, clearPendingSubmission } from '../src/lib/api.js';
+import {
+  api,
+  setApiActor,
+  getPendingSale,
+  getPendingSubmissions,
+  resolveScan,
+  clearPendingSubmission,
+} from '../src/lib/api.js';
 beforeEach(() => {
   const values = new Map<string, string>();
   vi.stubGlobal('window', new EventTarget());
@@ -27,7 +34,9 @@ describe('Client submission recovery', () => {
     const fetcher = vi
       .fn()
       .mockResolvedValueOnce(new Response('{', { status: 201 }))
-      .mockResolvedValueOnce(Response.json({ id: 'saved-sale' }));
+      .mockResolvedValueOnce(
+        Response.json({ ok: true, id: 'saved-sale', ref: 'SL-FIXTURE', total_cents: 10000, change_cents: 0 }),
+      );
     vi.stubGlobal('fetch', fetcher);
     await expect(
       api('/sales', { method: 'POST', body, key: 'original-submission-key' }),
@@ -67,9 +76,17 @@ describe('Client submission recovery', () => {
     clearPendingSubmission(original.storageKey);
   });
   it('allows two distinct confirmed all-cash sales with identical line contents', async () => {
-    const fetcher = vi
-      .fn()
-      .mockImplementation(() => Promise.resolve(Response.json({ id: crypto.randomUUID() })));
+    const fetcher = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        Response.json({
+          ok: true,
+          id: crypto.randomUUID(),
+          ref: 'SL-FIXTURE',
+          total_cents: 10000,
+          change_cents: 0,
+        }),
+      ),
+    );
     vi.stubGlobal('fetch', fetcher);
     await api('/sales', { method: 'POST', body });
     await api('/sales', { method: 'POST', body });
@@ -92,5 +109,64 @@ describe('Client submission recovery', () => {
     vi.stubGlobal('fetch', fetcher);
     await expect(api('/sales', { method: 'POST', body })).rejects.toMatchObject({ code: 'STORAGE_REQUIRED' });
     expect(fetcher).not.toHaveBeenCalled();
+  });
+  it('preserves the full non-POS intent and blocks another financial action after response loss', async () => {
+    const fetcher = vi.fn().mockRejectedValue(new TypeError('Network lost'));
+    vi.stubGlobal('fetch', fetcher);
+    const expense = {
+      amount: '50',
+      category: 'Transport',
+      method: 'Cash',
+      description: 'Synthetic pending expense',
+      expense_date: '2026-09-05',
+    };
+    await expect(api('/expenses', { method: 'POST', body: expense })).rejects.toMatchObject({
+      code: 'OUTCOME_UNKNOWN',
+    });
+    expect(getPendingSubmissions()[0].body).toEqual(expense);
+    await expect(
+      api('/purchases', { method: 'POST', body: { invoice_ref: 'different' } }),
+    ).rejects.toMatchObject({ code: 'PENDING_SUBMISSION' });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    clearPendingSubmission(getPendingSubmissions()[0].storageKey);
+  });
+  it('keeps a key when a successful HTTP response contains the wrong JSON contract', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({})));
+    await expect(api('/sales', { method: 'POST', body })).rejects.toMatchObject({ code: 'OUTCOME_UNKNOWN' });
+    expect(getPendingSale()).toBeTruthy();
+    clearPendingSubmission(getPendingSale()!.storageKey);
+  });
+  it('scopes new pending intents to business and branch and recognises legacy keys', async () => {
+    setApiActor({ id: 'same-user', business_id: 'business', branch_id: 'one' });
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Interrupted')));
+    await expect(api('/sales', { method: 'POST', body })).rejects.toThrow();
+    setApiActor({ id: 'same-user', business_id: 'business', branch_id: 'two' });
+    expect(getPendingSale()).toBeNull();
+    setApiActor({ id: 'same-user', business_id: 'business', branch_id: 'one' });
+    expect(getPendingSale()).toBeTruthy();
+    clearPendingSubmission(getPendingSale()!.storageKey);
+    const storageKey = 'kilele-submission:same-user:' + 'a'.repeat(64);
+    sessionStorage.setItem(
+      storageKey,
+      JSON.stringify({
+        storageKey,
+        key: 'legacy-submission-key',
+        method: 'POST',
+        path: '/expenses',
+        created_at: '2026-09-05T10:00:00Z',
+      }),
+    );
+    expect(getPendingSubmissions()[0].key).toBe('legacy-submission-key');
+    clearPendingSubmission(storageKey);
+  });
+  it('resolves verified barcode aliases before SKU and refuses ambiguous case-folded SKUs', () => {
+    const products = [
+      { sku: 'WINE', barcode: null, barcodes: [] },
+      { sku: 'wine', barcode: 'TEST-ALIAS', barcodes: ['TEST-ALIAS', 'OTHER-TEST-CODE'] },
+    ];
+    expect(resolveScan(products, 'OTHER-TEST-CODE')).toBe(products[1]);
+    expect(resolveScan(products, 'WiNe')).toBeNull();
+    expect(resolveScan(products, 'WINE')).toBe(products[0]);
+    expect(resolveScan(products, 'unknown')).toBeNull();
   });
 });

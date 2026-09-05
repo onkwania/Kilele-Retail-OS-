@@ -37,6 +37,7 @@ import {
   dateLabel,
   isReady,
   getPendingSale,
+  resolveScan,
 } from '../lib/api';
 import { useAuth, useQuery, useAction, useToast } from '../lib/state';
 import {
@@ -59,9 +60,11 @@ import CheckoutRecovery from '../components/CheckoutRecovery';
 import { SessionForm } from '../components/forms';
 export type CartLine = { product_id: string; quantity: number; price_type: string; version: number };
 export function ReceiptModal({ saleId, onClose }: { saleId: string; onClose: () => void }) {
+  const [layout, setLayout] = useState('80mm');
   const q = useQuery(`/sales/${saleId}`),
     auth = useAuth(),
     a = useAction();
+  const receipt = q.data?.sale.receipt_snapshot_json ? JSON.parse(q.data.sale.receipt_snapshot_json) : null;
   return (
     <Modal
       title="Sale completed"
@@ -83,8 +86,11 @@ export function ReceiptModal({ saleId, onClose }: { saleId: string; onClose: () 
               <Badge tone="green">Payment recorded</Badge>
             </div>
             <div className="receipt-paper">
-              <h3>{auth.business?.name}</h3>
-              <p>{auth.branch?.name} · Kenya</p>
+              <h3>{receipt?.business.name ?? auth.business?.name}</h3>
+              <p>{receipt?.branch.name ?? auth.branch?.name} · Kenya</p>
+              <p>KRA PIN: {receipt?.business.tax_pin || 'Not configured'}</p>
+              <p>Register: {receipt?.register ?? 'Not recorded'}</p>
+              {!receipt && <small>Legacy receipt: current merchant identity shown.</small>}
               <div className="receipt-ref">{q.data.sale.ref}</div>
               <div className="receipt-meta">
                 <span>{dateLabel(q.data.sale.created_at, true)}</span>
@@ -134,15 +140,26 @@ export function ReceiptModal({ saleId, onClose }: { saleId: string; onClose: () 
                   </span>
                 </div>
               ))}
-              <p className="receipt-thanks">{auth.business?.receipt_footer}</p>
+              <p className="receipt-thanks">
+                {receipt?.business.receipt_footer ?? auth.business?.receipt_footer}
+              </p>
               <small className="receipt-tax-note">Internal sales receipt · Not an eTIMS fiscal invoice</small>
             </div>
+            <Field label="Receipt paper">
+              <select value={layout} onChange={(e) => setLayout(e.target.value)}>
+                <option value="80mm">80 mm receipt</option>
+                <option value="58mm">58 mm receipt</option>
+                <option value="a4">A4 document</option>
+              </select>
+            </Field>
             <div className="receipt-actions">
               <Button
                 variant="secondary"
                 busy={a.busy}
                 onClick={() =>
-                  void a.run(() => download(`/sales/${saleId}/receipt`, `receipt-${q.data!.sale.ref}.pdf`))
+                  void a.run(() =>
+                    download(`/sales/${saleId}/receipt?layout=${layout}`, `receipt-${q.data!.sale.ref}.pdf`),
+                  )
                 }
               >
                 <Download size={15} />
@@ -150,7 +167,7 @@ export function ReceiptModal({ saleId, onClose }: { saleId: string; onClose: () 
               </Button>
               <Button
                 variant="secondary"
-                onClick={() => void a.run(() => openDocument(`/sales/${saleId}/receipt`))}
+                onClick={() => void a.run(() => openDocument(`/sales/${saleId}/receipt?layout=${layout}`))}
               >
                 <Printer size={15} />
                 Print / view receipt
@@ -189,7 +206,8 @@ function PaymentModal({
     [tendered, setTendered] = useState(''),
     [reference, setReference] = useState(''),
     [age, setAge] = useState(false),
-    [confirmed, setConfirmed] = useState(false);
+    [confirmed, setConfirmed] = useState(false),
+    [note, setNote] = useState('');
   const [parts, setParts] = useState([
     { method: 'Cash', amount: '', reference: '', tendered: '' },
     { method: 'M-Pesa', amount: '', reference: '', tendered: '' },
@@ -245,7 +263,10 @@ function PaymentModal({
                 discount_reason: discountReason,
                 expected_total: numeric(due),
                 payments,
-                notes: alcohol ? 'Cashier confirmed customer is 18 or over.' : '',
+                notes: [alcohol ? 'Cashier confirmed customer is 18 or over.' : '', note]
+                  .filter(Boolean)
+                  .join(' '),
+                age_confirmed: age,
               },
             });
             onComplete(result.id);
@@ -430,6 +451,14 @@ function PaymentModal({
             </label>
           )}
         </div>
+        <Field label="Sale note / correction request reference">
+          <Input
+            value={note}
+            maxLength={800}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="Optional request or operational note"
+          />
+        </Field>
         {a.error && <Notice tone="error">{a.error}</Notice>}
         <div className="form-footer">
           <Button variant="ghost" type="button" onClick={onClose} disabled={a.busy}>
@@ -479,7 +508,9 @@ export default function POS() {
       p.active &&
       (category === 'All' || p.category === category) &&
       (!onlyReady || isReady(p)) &&
-      `${p.name} ${p.sku} ${p.barcode ?? ''} ${p.brand}`.toLowerCase().includes(search.toLowerCase()),
+      `${p.name} ${p.sku} ${(p.barcodes ?? []).join(' ')} ${p.barcode ?? ''} ${p.brand}`
+        .toLowerCase()
+        .includes(search.toLowerCase()),
   );
   useEffect(() => {
     searchRef.current?.focus();
@@ -559,10 +590,8 @@ export default function POS() {
     searchRef.current?.focus();
   };
   const scan = () => {
-    const text = search.trim().toLowerCase();
-    const match =
-      products.find((p) => (p.barcode ?? '').toLowerCase() === text || p.sku.toLowerCase() === text) ||
-      (filtered.length === 1 ? filtered[0] : null);
+    const text = search.trim();
+    const match = resolveScan(products, text) ?? (filtered.length === 1 ? filtered[0] : null);
     if (match && text) add(match);
     else if (text) toast('No exact barcode / SKU match. Choose a product from the results.', 'info');
   };

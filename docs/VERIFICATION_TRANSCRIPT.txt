@@ -1,0 +1,227 @@
+Kilele second-pass release verification
+Commands were actually executed in the sandbox. See SECOND_PASS_VERIFICATION.json for timestamps and prior failed attempts.
+
+
+=== npm ci (final clean install) ===
+npm warn deprecated prebuild-install@7.1.3: No longer maintained. Please contact the author of the relevant native addon; alternatives are available.
+
+added 384 packages, and audited 385 packages in 2m
+
+106 packages are looking for funding
+  run `npm fund` for details
+
+found 0 vulnerabilities
+
+
+=== npm run verify and npm run db:check ===
+
+> kilele-retail-os@1.0.0 verify
+> npm run test && npm run typecheck && npm run lint && npm run build
+
+
+> kilele-retail-os@1.0.0 test
+> vitest run
+
+
+ RUN  v4.1.11 /home/user
+
+ ✓ tests/api-completion.test.ts (10 tests) 18665ms
+     ✓ executes all four critical chains as accountant and independent admin using HTTP  2017ms
+     ✓ denies accountant administrator capabilities and all destructive or historical write routes at API level  1267ms
+     ✓ blocks forged totals, body scopes, privileges, SQL injection and mismatched origins without ledger effects  911ms
+     ✓ rolls back every sale effect on a late journal failure and safely retries its original key  846ms
+     ✓ preserves barcode aliases and unrelated metadata and refuses private evidence as a product image  840ms
+     ✓ preserves merchant/PIN/register snapshots in all PDF layouts after master data changes  848ms
+     ✓ upgrades legacy password hashes, revokes old sessions and rejects malformed hashes safely  2501ms
+     ✓ enforces login/password attempt limits and renews the allowance after an expired lockout  6992ms
+     ✓ does not replay or project another branch’s records after administrative reassignment  846ms
+     ✓ rejects unknown export filters, never sums unit prices, and keeps AI feature access read-only  1595ms
+ ✓ tests/hardening.test.ts (12 tests) 13180ms
+     ✓ permanently blocks preview database promotion and preview auth on operational data  831ms
+     ✓ rejects fractional minor units and quantities even through direct future database code  425ms
+     ✓ creates a consistent backup, validates a fresh-path restore, and refuses tampering or overwrite  453ms
+     ✓ replays interrupted checkouts once, scopes recovery to their owner, and makes cancellation race-safe  1655ms
+     ✓ enforces cashier and accountant restrictions, hides buying costs and rejects access to another tenant  2782ms
+     ✓ validates file signatures, ownership, purpose permissions, private access and size limits  1663ms
+     ✓ requires correction narratives and supports independent clarification through authenticated HTTP  1639ms
+     ✓ returns purchases at current WAC and explicitly accounts for the valuation difference  831ms
+     ✓ reverses supplier payments into the reviewer’s live drawer without rewriting the original drawer  805ms
+     ✓ applies approved price changes with a linked price history, while rejecting stale supplier changes  815ms
+     ✓ counts refunds posted today against older sales in today’s collections and prints historical receipt values  1264ms
+ ✓ tests/approvals.test.ts (6 tests) 4884ms
+     ✓ blocks self-approval and preserves originals after a sale reversal  844ms
+     ✓ handles partial returns without exceeding quantities or tender balances  799ms
+     ✓ creates an expense reversal and replacement without mutating posted history  808ms
+     ✓ approves staff receiving and rejects stock movements when a request is rejected  823ms
+     ✓ preserves a submitted closing and posts a separate approved correction  789ms
+     ✓ makes approval original payload and terminal decisions immutable  819ms
+ ✓ tests/second-pass-security.test.ts (6 tests) 4494ms
+     ✓ rejects REPLACE of immutable sale, journal and audit rows or a populated inventory balance  433ms
+     ✓ detects financially inconsistent snapshots even if a host administrator bypasses guards  410ms
+     ✓ preserves an accountant report-deny override through an unrelated metadata edit  807ms
+     ✓ does not disclose another tenant’s audit counts or financial failures through the integrity API  1237ms
+     ✓ does not enable preview on unmarked operational data just because a user has a preview-like email  797ms
+     ✓ keeps an explicitly operational database operational when staff metadata contains a reserved-looking email  808ms
+ ✓ tests/sales.test.ts (6 tests) 3372ms
+     ✓ posts split payment, price/cost snapshots, change and stock in one transaction  441ms
+     ✓ rolls back the whole sale on a duplicate payment reference  434ms
+     ✓ rejects unset prices, forged prices, payment mismatch, negative and excess stock  429ms
+     ✓ keeps snapshots when current prices change  421ms
+     ✓ prevents unauthorised discounts and another user session  807ms
+     ✓ deduplicates an identical HTTP checkout and rejects changed retry bodies  836ms
+ ✓ tests/second-pass-accounting.test.ts (4 tests) 2973ms
+     ✓ restocks zero-cent partial returns and conserves the full original money and COGS  841ms
+     ✓ appends a linked replacement to rejected receiving and requires another reviewer even when entered by admin  1201ms
+     ✓ requires real immediate electronic settlement references and prevents duplicate transfers  438ms
+     ✓ migrates populated v1 tables without altering any existing fields, child references or audit hashes  490ms
+ ✓ tests/foundation.test.ts (7 tests) 2855ms
+     ✓ initialises foreign keys, audit chain, and integrity checks  412ms
+     ✓ makes audit history undeletable and uneditable  394ms
+     ✓ does not give cashiers admin permissions  387ms
+     ✓ blocks anonymous APIs and unsupported destructive routes  439ms
+     ✓ enforces real cookie auth and CSRF  820ms
+     ✓ refuses insecure production and preview in production  398ms
+ ✓ tests/recovery-extensions.test.ts (2 tests) 2579ms
+     ✓ looks up/replays an expense once and atomically cancels legacy unposted keys without a stored body  929ms
+     ✓ does not expose another user’s outcome or allow cancellation of a forbidden operation  1648ms
+ ✓ tests/inventory.test.ts (4 tests) 2156ms
+     ✓ records a supplier purchase, raises inventory and maintains weighted average cost  446ms
+     ✓ holds staff stock receiving until an authorised reviewer posts it  833ms
+     ✓ rejects repeated opening stock and direct balance changes  434ms
+     ✓ protects stock counts from concurrent stock changes  441ms
+ ✓ tests/catalogue.test.ts (4 tests) 1814ms
+     ✓ seeds sourced products with no invented prices, stock or barcodes  450ms
+     ✓ does not overwrite prices or duplicate catalogue on startup  445ms
+     ✓ extends missing sourced entries without overwriting existing owner prices  464ms
+     ✓ audits each price change and rejects stale versions and cashier edits  453ms
+ ✓ tests/analytics.test.ts (3 tests) 1744ms
+     ✓ calculates recorded COGS, profit, gross margin and exact tender totals  458ms
+     ✓ nets approved returns rather than hiding or changing historical sales  839ms
+     ✓ validates date ranges and renders honest empty financial states  443ms
+ ✓ tests/vat-precision.test.ts (2 tests) 1758ms
+     ✓ separates manually claimed input VAT from inventory, supplier liability and expense cost  893ms
+     ✓ never refunds more VAT than gross money on penny-rounded partial returns  864ms
+ ✓ tests/reports.test.ts (3 tests) 1767ms
+     ✓ reports each sale line once even with split payments and applies product/staff filters  488ms
+     ✓ reconstructs inventory from movements and disallows unsupported filters  445ms
+     ✓ neutralises CSV formula injection and enforces report permissions  832ms
+ ✓ tests/management.test.ts (2 tests) 1706ms
+     ✓ provisions staff with temporary passwords but prevents administrator escalation  1256ms
+     ✓ does not allow self-demotion or self-deactivation  448ms
+ ✓ tests/backup-races.test.ts (2 tests) 1401ms
+     ✓ keeps one valid complete snapshot when two jobs race for the same destination  485ms
+     ✓ refuses a valid but different database substituted during copying and never publishes it  914ms
+ ✓ tests/expenses.test.ts (3 tests) 1369ms
+     ✓ posts immutable expenses and reconciles exact net cash, excluding change  467ms
+     ✓ requires variance reasons and locks a closed session  448ms
+     ✓ rejects cash spending without enough float and zero amounts  452ms
+ ✓ tests/client-api.test.ts (9 tests) 53ms
+ ✓ tests/migration-failure.test.ts (1 test) 35ms
+
+ Test Files  18 passed (18)
+      Tests  86 passed (86)
+   Start at  15:41:30
+   Duration  80.20s (transform 579ms, setup 0ms, import 11.01s, tests 66.81s, environment 2ms)
+
+
+> kilele-retail-os@1.0.0 typecheck
+> tsc --noEmit
+
+
+> kilele-retail-os@1.0.0 lint
+> eslint .
+
+
+> kilele-retail-os@1.0.0 build
+> tsc --noEmit && vite build && esbuild server/index.ts server/bootstrap.ts server/check.ts server/backup.ts server/restore.ts server/catalogue-update.ts --bundle --platform=node --packages=external --format=esm --outdir=dist/server
+
+vite v8.2.2 building client environment for production...
+transforming...
+✓ 1867 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/client/index.html                                         0.58 kB │ gzip:   0.38 kB
+dist/client/assets/manrope-latin-wght-normal-DHIcAJRg.woff2   24.83 kB
+dist/client/assets/inter-latin-wght-normal-Dx4kXJAl.woff2     48.25 kB
+dist/client/assets/index-Db52P-QP.css                         80.69 kB │ gzip:  16.67 kB
+dist/client/assets/index-DU8zbkLK.js                         475.48 kB │ gzip: 137.23 kB
+
+✓ built in 546ms
+
+  dist/server/index.js             198.3kb
+  dist/server/bootstrap.js          29.4kb
+  dist/server/catalogue-update.js   26.9kb
+  dist/server/backup.js             15.2kb
+  dist/server/restore.js            15.1kb
+  dist/server/check.js              12.5kb
+
+⚡ Done in 33ms
+
+> kilele-retail-os@1.0.0 db:check
+> tsx server/check.ts
+
+{
+  "ok": true,
+  "errors": [],
+  "auditEvents": 18,
+  "checkedAt": "2026-09-05T15:43:14.066Z",
+  "scope": "database"
+}
+
+
+=== npm run test:e2e ===
+
+> kilele-retail-os@1.0.0 test:e2e
+> npm run build && playwright test
+
+
+> kilele-retail-os@1.0.0 build
+> tsc --noEmit && vite build && esbuild server/index.ts server/bootstrap.ts server/check.ts server/backup.ts server/restore.ts server/catalogue-update.ts --bundle --platform=node --packages=external --format=esm --outdir=dist/server
+
+vite v8.2.2 building client environment for production...
+transforming...
+✓ 1867 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/client/index.html                                         0.58 kB │ gzip:   0.38 kB
+dist/client/assets/manrope-latin-wght-normal-DHIcAJRg.woff2   24.83 kB
+dist/client/assets/inter-latin-wght-normal-Dx4kXJAl.woff2     48.25 kB
+dist/client/assets/index-Db52P-QP.css                         80.69 kB │ gzip:  16.67 kB
+dist/client/assets/index-DU8zbkLK.js                         475.48 kB │ gzip: 137.23 kB
+
+✓ built in 512ms
+
+  dist/server/index.js             198.3kb
+  dist/server/bootstrap.js          29.4kb
+  dist/server/catalogue-update.js   26.9kb
+  dist/server/backup.js             15.2kb
+  dist/server/restore.js            15.1kb
+  dist/server/check.js              12.5kb
+
+⚡ Done in 28ms
+
+Running 8 tests using 1 worker
+
+  ✓  1 e2e/workspace.spec.ts:72:1 › real operational journey: manual prices, POS, payments, receiving, expense, closing and independent corrections (23.6s)
+  ✓  2 e2e/workspace.spec.ts:365:1 › workspace navigation, tablet POS and mobile administration render without page errors or horizontal overflow (3.2s)
+  ✓  3 e2e/workspace.spec.ts:405:1 › embedded preview authentication works with secure partitioned cookies (2.3s)
+  ✓  4 e2e/workspace.spec.ts:438:1 › cashier can sell configured products without cost access, admin controls or wholesale discounts (7.2s)
+  ✓  5 e2e/workspace.spec.ts:494:1 › production-mode HTTPS requires real login, disables preview and issues a strict secure session (1.4s)
+  ✓  6 e2e/workspace.spec.ts:530:1 › second-pass non-POS recovery preserves a committed expense and cancels a never-posted intent (4.2s)
+  ✓  7 e2e/workspace.spec.ts:619:1 › second-pass accountant replaces rejected receiving through independent approval without changing the invoice or original (7.9s)
+  ✓  8 e2e/workspace.spec.ts:722:1 › second-pass dashboard, barcode keyboard input, literal XSS text, electronic tenders and receipt formats (6.8s)
+
+  8 passed (1.0m)
+
+
+=== npm audit --omit=dev ===
+found 0 vulnerabilities
+
+
+=== npm run format:check ===
+
+> kilele-retail-os@1.0.0 format:check
+> prettier --check src server shared tests e2e docs *.ts *.json *.md deploy
+
+Checking formatting...
+All matched files use Prettier code style!

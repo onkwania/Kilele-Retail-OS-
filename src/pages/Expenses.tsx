@@ -74,7 +74,7 @@ export default function Expenses() {
         {[
           {
             label: 'Net recent expenses',
-            value: money(active.reduce((s, e) => s + e.amount_cents, 0)),
+            value: money(active.reduce((s, e) => s + e.amount_cents - (e.input_tax_cents ?? 0), 0)),
             icon: Wallet,
           },
           {

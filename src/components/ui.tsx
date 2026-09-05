@@ -570,18 +570,29 @@ export function RangeControl({
   range: { from: string; to: string };
   onChange: (r: { from: string; to: string }) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(false),
+    [draft, setDraft] = useState(range);
+  const weekday = new Date(`${today()}T12:00:00Z`).getUTCDay();
+  const presets = [
+    { label: 'Today', from: today(), to: today() },
+    { label: 'Yesterday', from: daysAgo(1), to: daysAgo(1) },
+    { label: 'This week', from: daysAgo((weekday + 6) % 7), to: today() },
+    { label: 'Last 7 days', from: daysAgo(6), to: today() },
+    { label: 'This month', from: today().slice(0, 7) + '-01', to: today() },
+    { label: 'Last 30 days', from: daysAgo(29), to: today() },
+  ];
   const label =
-    range.from === today() && range.to === today()
-      ? 'Today'
-      : range.from === daysAgo(6) && range.to === today()
-        ? 'Last 7 days'
-        : range.from === today().slice(0, 7) + '-01' && range.to === today()
-          ? 'This month'
-          : `${dateLabel(range.from)} – ${dateLabel(range.to)}`;
+    presets.find((p) => p.from === range.from && p.to === range.to)?.label ??
+    `${dateLabel(range.from)} – ${dateLabel(range.to)}`;
   return (
     <div className="range-control">
-      <Button variant="secondary" onClick={() => setOpen(!open)}>
+      <Button
+        variant="secondary"
+        onClick={() => {
+          setDraft(range);
+          setOpen(!open);
+        }}
+      >
         <span className="calendar-mini">▦</span>
         {label}
         <ChevronRight size={14} style={{ transform: 'rotate(90deg)' }} />
@@ -590,19 +601,15 @@ export function RangeControl({
         <>
           <div className="popover-dismiss" onClick={() => setOpen(false)} />
           <div className="range-popover">
-            {[
-              { label: 'Today', from: today() },
-              { label: 'Last 7 days', from: daysAgo(6) },
-              { label: 'This month', from: today().slice(0, 7) + '-01' },
-            ].map((o) => (
+            {presets.map((p) => (
               <button
-                key={o.label}
+                key={p.label}
                 onClick={() => {
-                  onChange({ from: o.from, to: today() });
+                  onChange({ from: p.from, to: p.to });
                   setOpen(false);
                 }}
               >
-                {o.label}
+                {p.label}
                 <ArrowUpRight size={14} />
               </button>
             ))}
@@ -610,22 +617,29 @@ export function RangeControl({
               <Field label="From">
                 <Input
                   type="date"
-                  max={range.to}
-                  value={range.from}
-                  onChange={(e) => onChange({ ...range, from: e.target.value })}
+                  max={draft.to}
+                  value={draft.from}
+                  onChange={(e) => setDraft((s) => ({ ...s, from: e.target.value }))}
                 />
               </Field>
               <Field label="To">
                 <Input
                   type="date"
-                  min={range.from}
+                  min={draft.from}
                   max={today()}
-                  value={range.to}
-                  onChange={(e) => onChange({ ...range, to: e.target.value })}
+                  value={draft.to}
+                  onChange={(e) => setDraft((s) => ({ ...s, to: e.target.value }))}
                 />
               </Field>
             </div>
-            <Button size="sm" onClick={() => setOpen(false)}>
+            <Button
+              size="sm"
+              disabled={!draft.from || !draft.to || draft.from > draft.to || draft.to > today()}
+              onClick={() => {
+                onChange(draft);
+                setOpen(false);
+              }}
+            >
               Apply dates
             </Button>
           </div>

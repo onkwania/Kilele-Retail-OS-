@@ -49,6 +49,7 @@ export const expenseSchema = z
   .object({
     category: z.enum(EXPENSE_CATEGORIES),
     amount: moneyInput,
+    input_tax: moneyInput.default('0'),
     expense_date: dateInput,
     method: methodInput,
     description: z.string().trim().min(3).max(2000),
@@ -68,6 +69,8 @@ export function createExpense(
   const b = expenseSchema.parse(input),
     value = cents(b.amount);
   requireThat(value > 0, 'Expense must be greater than zero.');
+  const inputTax = cents(b.input_tax);
+  requireThat(inputTax <= value, 'Recoverable input tax must not exceed the amount paid.');
   if (b.document_id) {
     const doc = scoped(db, 'documents', b.document_id, a);
     requireThat(
@@ -91,6 +94,7 @@ export function createExpense(
     session_id: session?.id ?? null,
     category: b.category,
     amount_cents: value,
+    input_tax_cents: inputTax,
     method: b.method,
     description: b.description,
     payee: b.payee,
@@ -108,7 +112,8 @@ export function createExpense(
     row.ref,
     `Expense: ${b.category}`,
     [
-      { account: `Expense: ${b.category}`, debit: value },
+      { account: `Expense: ${b.category}`, debit: value - inputTax },
+      { account: 'Input VAT', debit: inputTax },
       { account: paymentAccount(b.method), credit: value },
     ],
     approvalId,
@@ -211,7 +216,13 @@ export function installExpenses(app: Express, db: DB) {
       a.branch_id,
       ...(branchAccess ? [] : [a.id]),
     );
-    const current = one(db, 'SELECT id FROM cash_sessions WHERE user_id=? AND closed_at IS NULL', a.id);
+    const current = one(
+      db,
+      'SELECT id FROM cash_sessions WHERE user_id=? AND business_id=? AND branch_id=? AND closed_at IS NULL',
+      a.id,
+      a.business_id,
+      a.branch_id,
+    );
     const closings = all(
       db,
       `SELECT r.*,u.name staff_name,ar.status,ar.review_reason,ar.id request_id,COALESCE((SELECT ra.actual_cents FROM reconciliation_adjustments ra WHERE ra.reconciliation_id=r.id ORDER BY ra.rowid DESC LIMIT 1),r.actual_cents) current_actual_cents,COALESCE((SELECT ra.variance_cents FROM reconciliation_adjustments ra WHERE ra.reconciliation_id=r.id ORDER BY ra.rowid DESC LIMIT 1),r.variance_cents) current_variance_cents FROM reconciliations r JOIN users u ON u.id=r.user_id LEFT JOIN approval_requests ar ON ar.entity_id=r.id AND ar.kind='daily_closing'

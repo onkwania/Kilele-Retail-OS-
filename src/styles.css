@@ -5749,3 +5749,94 @@ button::-moz-focus-inner {
     padding-bottom: 72px;
   }
 }
+
+/* Second-pass metrics extend existing panels; current stock and period flows are explicitly distinct. */
+.quick-metrics {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+.period-panel {
+  margin-bottom: 22px;
+}
+.period-financial-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
+  padding: 6px 22px 14px;
+}
+.period-financial-grid > div {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border);
+  min-width: 0;
+}
+.period-financial-grid small {
+  display: block;
+  font-size: 12px;
+  color: #64705f;
+  margin-bottom: 7px;
+}
+.period-financial-grid strong {
+  font-size: 19px;
+  letter-spacing: -0.5px;
+}
+.period-panel .table-note {
+  line-height: 1.6;
+}
+.product-performance-controls {
+  padding: 0 22px 18px;
+}
+.product-performance-controls label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+.product-performance-controls select {
+  font: inherit;
+  max-width: 100%;
+  padding: 8px;
+  border: 1px solid #dce4d7;
+  border-radius: 6px;
+  background: #f9fbf6;
+  color: #34553f;
+}
+.payment-panel > .table-note {
+  font-size: 11px;
+  line-height: 1.6;
+}
+.range-popover {
+  z-index: 80;
+}
+@media (max-width: 1100px) {
+  .quick-metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .period-financial-grid strong {
+    font-size: 16px;
+  }
+}
+@media (max-width: 700px) {
+  .quick-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .period-financial-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 4px 16px;
+    gap: 10px;
+  }
+  .period-financial-grid strong {
+    font-size: 15px;
+  }
+  .period-financial-grid small {
+    font-size: 11px;
+  }
+  .product-performance-controls {
+    padding: 0 15px 15px;
+  }
+  .product-performance-controls label {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .product-performance-controls select {
+    width: 100%;
+  }
+}

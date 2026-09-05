@@ -13,6 +13,7 @@ import {
   can,
   demand,
   kenyaDate,
+  safeSum,
 } from './core.js';
 import { protect } from './auth.js';
 import {
@@ -23,10 +24,16 @@ import {
   aggregate,
   staffPerformance,
   limited,
+  paymentEvents,
   type Range,
 } from './analytics.js';
-export type Column = { key: string; label: string; money?: boolean };
-const col = (key: string, label: string, money = false): Column => ({ key, label, money });
+export type Column = { key: string; label: string; money?: boolean; additive?: boolean };
+const col = (key: string, label: string, money = false, additive = true): Column => ({
+  key,
+  label,
+  money,
+  additive,
+});
 export const REPORTS: Record<
   string,
   { name: string; description: string; permission: string; filters: string[]; columns: Column[] }
@@ -44,7 +51,7 @@ export const REPORTS: Record<
       col('product_name', 'Product'),
       col('size', 'Size'),
       col('quantity', 'Qty'),
-      col('unit_price_cents', 'Unit price', true),
+      col('unit_price_cents', 'Unit price', true, false),
       col('total_cents', 'Total KES', true),
       col('payment_method', 'Payment'),
       col('staff', 'Staff'),
@@ -96,14 +103,17 @@ export const REPORTS: Record<
       col('category', 'Category'),
       col('supplier', 'Payee'),
       col('description', 'Description'),
-      col('amount_cents', 'Amount KES', true),
+      col('amount_cents', 'Paid KES', true),
+      col('input_tax_cents', 'Input VAT claim KES', true),
+      col('expense_cents', 'Net expense KES', true),
       col('payment_method', 'Payment'),
       col('staff', 'Staff'),
     ],
   },
   purchases: {
     name: 'Supplier purchases',
-    description: 'Received purchases and approved supplier returns. Unapproved deliveries are not inventory.',
+    description:
+      'Received inventory costs and supplier returns. Invoice totals/VAT are shown once per invoice only without a product filter; they are not allocated to filtered items. Initial terms are not later settlement methods.',
     permission: 'reports.inventory',
     filters: ['staff', 'product', 'supplier', 'payment'],
     columns: [
@@ -112,9 +122,11 @@ export const REPORTS: Record<
       col('supplier', 'Supplier'),
       col('product_name', 'Product'),
       col('quantity', 'Qty'),
-      col('cost_cents', 'Cost KES', true),
-      col('total_cents', 'Total KES', true),
-      col('payment_method', 'Payment'),
+      col('cost_cents', 'Cost KES', true, false),
+      col('total_cents', 'Inventory cost KES', true),
+      col('invoice_tax_cents', 'Invoice input VAT (once)', true),
+      col('invoice_payable_cents', 'Invoice payable (once)', true),
+      col('payment_method', 'Initial terms'),
       col('staff', 'Entered by'),
     ],
   },
@@ -126,13 +138,18 @@ export const REPORTS: Record<
     columns: [
       col('staff', 'Staff'),
       col('transactions', 'Sales'),
-      col('sales_cents', 'Sales KES', true),
-      col('average_cents', 'Average KES', true),
+      col('sales_cents', 'Net collections KES', true),
+      col('revenue_cents', 'Revenue ex-tax KES', true),
+      col('average_cents', 'Average KES', true, false),
       col('cash_cents', 'Cash KES', true),
       col('mpesa_cents', 'M-Pesa KES', true),
       col('card_cents', 'Card KES', true),
+      col('bank_cents', 'Bank KES', true),
       col('discounts_cents', 'Discounts issued', true),
-      col('correction_requests', 'Requests'),
+      col('correction_requests', 'Corrections'),
+      col('requests_total', 'All requests'),
+      col('stock_requests', 'Stock requests'),
+      col('purchase_entries', 'Receiving entries'),
       col('expenses_cents', 'Expenses KES', true),
       col('stock_entries', 'Stock entries'),
       col('reconciliation_status', 'Closing'),
@@ -152,6 +169,14 @@ export const REPORTS: Record<
       col('reviewer', 'Reviewer'),
       col('reason', 'Request reason'),
       col('review_reason', 'Decision reason'),
+      col('reviewed_at', 'Decision timestamp'),
+      col('entity', 'Original entity'),
+      col('entity_id', 'Original record ID'),
+      col('explanation', 'Explanation'),
+      col('requested_change', 'Requested outcome'),
+      col('evidence_id', 'Evidence ID'),
+      col('original_json', 'Preserved original'),
+      col('payload_json', 'Requested payload'),
     ],
   },
   audit: {
@@ -170,17 +195,25 @@ export const REPORTS: Record<
       col('before_json', 'Before state'),
       col('after_json', 'After state'),
       col('hash', 'SHA-256 hash'),
+      col('previous_hash', 'Previous hash'),
+      col('seq', 'Sequence'),
+      col('id', 'Event ID'),
+      col('user_id', 'User ID'),
+      col('ip', 'IP'),
+      col('device', 'Device'),
+      col('approval_id', 'Approval ID'),
     ],
   },
   payments: {
     name: 'Payment reconciliation',
     description:
-      'Exact sale tenders and refunds. Use this report for Cash, M-Pesa, Card and Bank settlement totals.',
+      'Recorded operating money in (+) and out (−), including sale, expense, supplier and approved variance movements. Excludes opening drawer counts. Not a provider statement.',
     permission: 'reports.read',
-    filters: ['staff', 'payment'],
+    filters: ['staff', 'payment', 'source'],
     columns: [
       col('date', 'Date'),
-      col('transaction_ref', 'Sale'),
+      col('transaction_ref', 'Origin reference'),
+      col('source', 'Source'),
       col('reference', 'Payment ref'),
       col('event_type', 'Type'),
       col('payment_method', 'Method'),
@@ -214,6 +247,7 @@ export const filterSchema = z.object({
   brand: z.string().max(150).optional(),
   supplier: z.string().max(200).optional(),
   payment: z.string().max(20).optional(),
+  source: z.enum(['', 'sale', 'expense', 'supplier', 'adjustment']).optional(),
 });
 export function inventoryReport(db: DB, a: Actor, r: Range): Row[] {
   const [start, end] = bounds(r);
@@ -244,9 +278,14 @@ export function inventoryReport(db: DB, a: Actor, r: Range): Row[] {
   );
 }
 export function getReport(db: DB, a: Actor, type: string, query: Record<string, unknown>) {
-  const definition = REPORTS[type];
+  const definition = Object.hasOwn(REPORTS, type) ? REPORTS[type] : undefined;
   requireThat(definition, 'Report not found.', 404);
   demand(a, definition.permission);
+  const allowedKeys = new Set(['from', 'to', 'format', ...Object.keys(filterSchema.shape)]);
+  requireThat(
+    Object.keys(query).every((key) => allowedKeys.has(key)),
+    'Unsupported report query parameter.',
+  );
   const range = readRange(query),
     filters = filterSchema.parse(query),
     [start, end] = bounds(range);
@@ -261,7 +300,7 @@ export function getReport(db: DB, a: Actor, type: string, query: Record<string, 
   else if (type === 'purchases') {
     const positive = all(
       db,
-      `SELECT p.id,p.ref,pr.created_at,p.supplier_name supplier,pi.product_id,pi.product_name,pi.quantity,pi.cost_cents,pi.total_cents,p.payment_method,p.user_id staff_id,u.name staff FROM purchases p JOIN purchase_receipts pr ON pr.purchase_id=p.id JOIN purchase_items pi ON pi.purchase_id=p.id JOIN users u ON u.id=p.user_id WHERE p.business_id=? AND p.branch_id=? AND pr.created_at>=? AND pr.created_at<? LIMIT 50001`,
+      `SELECT p.id,p.ref,pr.created_at,p.supplier_name supplier,pi.product_id,pi.product_name,pi.quantity,pi.cost_cents,pi.total_cents,p.total_cents invoice_total_snapshot,p.input_tax_cents input_tax_snapshot,p.payment_method,p.user_id staff_id,u.name staff FROM purchases p JOIN purchase_receipts pr ON pr.purchase_id=p.id JOIN purchase_items pi ON pi.purchase_id=p.id JOIN users u ON u.id=p.user_id WHERE p.business_id=? AND p.branch_id=? AND pr.created_at>=? AND pr.created_at<? LIMIT 50001`,
       a.business_id,
       a.branch_id,
       start,
@@ -269,7 +308,7 @@ export function getReport(db: DB, a: Actor, type: string, query: Record<string, 
     );
     const negative = all(
       db,
-      `SELECT pr.id,pr.ref,pr.created_at,p.supplier_name supplier,pi.product_id,pi.product_name,-pi.quantity quantity,pi.cost_cents,-pi.total_cents total_cents,p.payment_method,pr.user_id staff_id,u.name staff FROM purchase_reversals pr JOIN purchases p ON p.id=pr.purchase_id JOIN purchase_items pi ON pi.purchase_id=p.id JOIN users u ON u.id=pr.user_id WHERE pr.business_id=? AND pr.branch_id=? AND pr.created_at>=? AND pr.created_at<? LIMIT 50001`,
+      `SELECT pr.id,pr.ref,pr.created_at,p.supplier_name supplier,pi.product_id,pi.product_name,-pi.quantity quantity,pi.cost_cents,-pi.total_cents total_cents,-p.total_cents invoice_total_snapshot,-p.input_tax_cents input_tax_snapshot,p.payment_method,pr.user_id staff_id,u.name staff FROM purchase_reversals pr JOIN purchases p ON p.id=pr.purchase_id JOIN purchase_items pi ON pi.purchase_id=p.id JOIN users u ON u.id=pr.user_id WHERE pr.business_id=? AND pr.branch_id=? AND pr.created_at>=? AND pr.created_at<? LIMIT 50001`,
       a.business_id,
       a.branch_id,
       start,
@@ -279,15 +318,7 @@ export function getReport(db: DB, a: Actor, type: string, query: Record<string, 
       ...r,
       date: kenyaDate(new Date(r.created_at)),
     }));
-  } else if (type === 'payments')
-    rows = all(
-      db,
-      `SELECT p.*,s.ref transaction_ref,p.method payment_method,p.user_id staff_id,u.name staff,CASE WHEN p.reversal_id IS NULL THEN 'tender' ELSE 'refund' END event_type FROM payments p JOIN sales s ON s.id=p.sale_id JOIN users u ON u.id=p.user_id WHERE p.business_id=? AND p.branch_id=? AND p.created_at>=? AND p.created_at<? LIMIT 50001`,
-      a.business_id,
-      a.branch_id,
-      start,
-      end,
-    );
+  } else if (type === 'payments') rows = paymentEvents(db, a, range);
   else if (type === 'approvals')
     rows = all(
       db,
@@ -319,17 +350,30 @@ export function getReport(db: DB, a: Actor, type: string, query: Record<string, 
   rows = rows.filter(
     (row) =>
       (!filters.staff || row.staff_id === filters.staff) &&
+      (!filters.source || row.source === filters.source) &&
       (!filters.product || row.product_id === filters.product) &&
       (!filters.category || row.category === filters.category) &&
       (!filters.brand || row.brand === filters.brand) &&
       (!filters.supplier || row.supplier === filters.supplier) &&
       (!filters.payment || String(row.payment_method).split(',').includes(filters.payment)),
   );
+  if (type === 'purchases') {
+    const seen = new Set<string>();
+    rows = rows.map((row) => {
+      const first = !seen.has(row.id);
+      seen.add(row.id);
+      return {
+        ...row,
+        invoice_tax_cents: !filters.product && first ? row.input_tax_snapshot : null,
+        invoice_payable_cents: !filters.product && first ? row.invoice_total_snapshot : null,
+      };
+    });
+  }
   if (type === 'profit')
     rows = aggregate(rows, 'product_id').map((g) => ({
       ...g,
       product_name: rows.find((r) => r.product_id === g.name)?.product_name ?? g.name,
-      margin: g.revenue_cents ? Number(((g.profit_cents / g.revenue_cents) * 100).toFixed(2)) : null,
+      margin: g.revenue_cents > 0 ? Number(((g.profit_cents / g.revenue_cents) * 100).toFixed(2)) : null,
     }));
   rows = rows.map((r) => ({
     ...r,
@@ -343,7 +387,7 @@ export function getReport(db: DB, a: Actor, type: string, query: Record<string, 
   }));
   const totals: Row = {};
   for (const c of definition.columns)
-    if (c.money) totals[c.key] = rows.reduce((sum, r) => sum + (r[c.key] ?? 0), 0);
+    if (c.money && c.additive !== false) totals[c.key] = safeSum(rows.map((r) => r[c.key] ?? 0));
   return {
     type,
     name: definition.name,
@@ -358,7 +402,7 @@ export function getReport(db: DB, a: Actor, type: string, query: Record<string, 
 }
 export function csvCell(value: unknown) {
   let s = value === null || value === undefined ? '' : String(value);
-  if (/^[=+@\-\t\r]/.test(s) && !/^[-+]?\d+(\.\d+)?$/.test(s)) s = "'" + s;
+  if (/^(?:[\s\uFEFF]*[=+@-]|[\t\r\n])/.test(s) && !/^[-+]?\d+(\.\d+)?$/.test(s)) s = "'" + s;
   return `"${s.replaceAll('"', '""')}"`;
 }
 export function csvReport(report: ReturnType<typeof getReport>) {
@@ -381,7 +425,12 @@ function pdfReport(res: Response, business: Row, report: ReturnType<typeof getRe
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename="kilele-${report.type}-${report.range.to}.pdf"`);
   doc.pipe(res);
-  const columns = report.type === 'audit' ? report.columns.slice(0, 7) : report.columns;
+  const columns =
+    report.type === 'audit'
+      ? report.columns.slice(0, 7)
+      : report.type === 'approvals'
+        ? report.columns.slice(0, 9)
+        : report.columns;
   const usable = doc.page.width - 60,
     colWidth = usable / columns.length;
   let y = 0;

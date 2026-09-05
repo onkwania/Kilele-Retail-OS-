@@ -27,7 +27,7 @@ export function TrendChart({
     right = 16,
     top = 15,
     bottom = 30;
-  const values = data.flatMap((d) => [d[first] ?? 0, d[second] ?? 0]);
+  const values = data.flatMap((d) => (showSecond ? [d[first] ?? 0, d[second] ?? 0] : [d[first] ?? 0]));
   const active = values.some((v) => v !== 0);
   const min = Math.min(0, ...values),
     max = Math.max(unit === 'money' ? 100 : 1, ...values);

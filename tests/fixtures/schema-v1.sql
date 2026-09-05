@@ -104,7 +104,7 @@ CREATE TABLE IF NOT EXISTS sales (
  customer_id TEXT, subtotal_cents INTEGER NOT NULL CHECK(subtotal_cents>0), discount_cents INTEGER NOT NULL DEFAULT 0 CHECK(discount_cents>=0),
  total_cents INTEGER NOT NULL CHECK(total_cents>0), tax_cents INTEGER NOT NULL CHECK(tax_cents>=0),
  cogs_cents INTEGER NOT NULL CHECK(cogs_cents>=0), discount_reason TEXT NOT NULL DEFAULT '',
- notes TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, receipt_snapshot_json TEXT, age_confirmed INTEGER NOT NULL DEFAULT 0 CHECK(age_confirmed IN(0,1)),
+ notes TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
  FOREIGN KEY(session_id,business_id,branch_id) REFERENCES cash_sessions(id,business_id,branch_id),
  FOREIGN KEY(customer_id,business_id) REFERENCES customers(id,business_id),
  UNIQUE(id,business_id,branch_id), CHECK(total_cents=subtotal_cents-discount_cents)
@@ -112,7 +112,7 @@ CREATE TABLE IF NOT EXISTS sales (
 CREATE TABLE IF NOT EXISTS sale_items (
  id TEXT PRIMARY KEY, sale_id TEXT NOT NULL, business_id TEXT NOT NULL, branch_id TEXT NOT NULL,
  product_id TEXT NOT NULL, product_name TEXT NOT NULL, sku TEXT NOT NULL, brand_name TEXT NOT NULL,
- category_name TEXT NOT NULL, supplier_name TEXT NOT NULL DEFAULT '', size TEXT NOT NULL, unit TEXT NOT NULL DEFAULT '',
+ category_name TEXT NOT NULL, supplier_name TEXT NOT NULL DEFAULT '', size TEXT NOT NULL,
  quantity INTEGER NOT NULL CHECK(quantity>0), unit_price_cents INTEGER NOT NULL CHECK(unit_price_cents>0),
  unit_cost_cents INTEGER NOT NULL CHECK(unit_cost_cents>=0), price_type TEXT NOT NULL,
  subtotal_cents INTEGER NOT NULL CHECK(subtotal_cents>0), discount_cents INTEGER NOT NULL CHECK(discount_cents>=0),
@@ -139,7 +139,7 @@ CREATE TABLE IF NOT EXISTS sale_reversals (
  id TEXT PRIMARY KEY, ref TEXT NOT NULL UNIQUE, business_id TEXT NOT NULL, branch_id TEXT NOT NULL,
  sale_id TEXT NOT NULL, approval_id TEXT NOT NULL UNIQUE REFERENCES approval_requests(id),
  user_id TEXT NOT NULL REFERENCES users(id), session_id TEXT,
- total_cents INTEGER NOT NULL CHECK(total_cents>=0), tax_cents INTEGER NOT NULL, cogs_cents INTEGER NOT NULL,
+ total_cents INTEGER NOT NULL CHECK(total_cents>0), tax_cents INTEGER NOT NULL, cogs_cents INTEGER NOT NULL,
  reason TEXT NOT NULL, created_at TEXT NOT NULL,
  FOREIGN KEY(sale_id,business_id,branch_id) REFERENCES sales(id,business_id,branch_id),
  FOREIGN KEY(session_id,business_id,branch_id) REFERENCES cash_sessions(id,business_id,branch_id), UNIQUE(id,business_id,branch_id)
@@ -164,7 +164,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS unique_payment_ref ON payments(business_id,met
 CREATE TABLE IF NOT EXISTS expenses (
  id TEXT PRIMARY KEY, ref TEXT NOT NULL UNIQUE, business_id TEXT NOT NULL, branch_id TEXT NOT NULL,
  user_id TEXT NOT NULL REFERENCES users(id), session_id TEXT,
- category TEXT NOT NULL, amount_cents INTEGER NOT NULL CHECK(amount_cents>0), input_tax_cents INTEGER NOT NULL DEFAULT 0 CHECK(input_tax_cents>=0 AND input_tax_cents<=amount_cents),
+ category TEXT NOT NULL, amount_cents INTEGER NOT NULL CHECK(amount_cents>0),
  method TEXT NOT NULL CHECK(method IN('Cash','M-Pesa','Card','Bank')), description TEXT NOT NULL,
  payee TEXT NOT NULL DEFAULT '', reference TEXT NOT NULL DEFAULT '', document_id TEXT,
  expense_date TEXT NOT NULL, created_at TEXT NOT NULL, replaces_id TEXT REFERENCES expenses(id), approval_id TEXT REFERENCES approval_requests(id),
@@ -184,11 +184,10 @@ CREATE TABLE IF NOT EXISTS purchases (
  user_id TEXT NOT NULL REFERENCES users(id), supplier_id TEXT NOT NULL, supplier_name TEXT NOT NULL,
  total_cents INTEGER NOT NULL CHECK(total_cents>0), invoice_ref TEXT NOT NULL, purchase_date TEXT NOT NULL,
  payment_method TEXT NOT NULL CHECK(payment_method IN('Credit','Cash','M-Pesa','Card','Bank')),
- notes TEXT NOT NULL DEFAULT '', document_id TEXT, created_at TEXT NOT NULL, payment_reference TEXT NOT NULL DEFAULT '', replaces_id TEXT, input_tax_cents INTEGER NOT NULL DEFAULT 0 CHECK(input_tax_cents>=0 AND input_tax_cents<=total_cents),
- FOREIGN KEY(replaces_id,business_id,branch_id) REFERENCES purchases(id,business_id,branch_id),
+ notes TEXT NOT NULL DEFAULT '', document_id TEXT, created_at TEXT NOT NULL,
  FOREIGN KEY(supplier_id,business_id) REFERENCES suppliers(id,business_id),
  FOREIGN KEY(branch_id,business_id) REFERENCES branches(id,business_id),
- UNIQUE(id,business_id,branch_id), CHECK(replaces_id IS NULL OR replaces_id<>id)
+ UNIQUE(business_id,supplier_id,invoice_ref), UNIQUE(id,business_id,branch_id)
 );
 CREATE TABLE IF NOT EXISTS purchase_items (
  id TEXT PRIMARY KEY, purchase_id TEXT NOT NULL, business_id TEXT NOT NULL, branch_id TEXT NOT NULL,
@@ -322,13 +321,3 @@ CREATE TABLE IF NOT EXISTS reconciliation_adjustments (
  previous_variance_cents INTEGER NOT NULL, variance_cents INTEGER NOT NULL, reason TEXT NOT NULL, created_at TEXT NOT NULL,
  FOREIGN KEY(branch_id,business_id) REFERENCES branches(id,business_id)
 );
-
-CREATE UNIQUE INDEX IF NOT EXISTS one_purchase_replacement ON purchases(replaces_id) WHERE replaces_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS purchase_invoice_lookup ON purchases(business_id,supplier_id,invoice_ref);
-CREATE TRIGGER IF NOT EXISTS active_purchase_invoice BEFORE INSERT ON purchases
-WHEN EXISTS(SELECT 1 FROM purchases p WHERE p.business_id=NEW.business_id AND p.supplier_id=NEW.supplier_id AND lower(trim(p.invoice_ref))=lower(trim(NEW.invoice_ref)) AND (
- (EXISTS(SELECT 1 FROM purchase_receipts pr WHERE pr.purchase_id=p.id) AND NOT EXISTS(SELECT 1 FROM purchase_reversals rv WHERE rv.purchase_id=p.id))
- OR (NOT EXISTS(SELECT 1 FROM purchase_receipts pr WHERE pr.purchase_id=p.id) AND NOT EXISTS(SELECT 1 FROM approval_requests r WHERE r.entity_id=p.id AND r.kind='stock_receipt' AND r.status='rejected'))))
-BEGIN SELECT RAISE(ABORT,'This supplier invoice already has an active purchase'); END;
-
-CREATE UNIQUE INDEX IF NOT EXISTS open_register_name_normalized ON cash_sessions(business_id,branch_id,lower(trim(register))) WHERE closed_at IS NULL;

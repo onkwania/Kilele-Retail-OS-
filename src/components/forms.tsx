@@ -356,6 +356,16 @@ export function ExpenseFields({
       <Field label="Amount" required>
         <MoneyInput value={form.amount} onChange={(v) => set('amount', v)} label="Expense amount" required />
       </Field>
+      <Field
+        label="Recoverable input VAT included in amount"
+        hint="Default zero means no claim. Enter only tax confirmed deductible by your accountant."
+      >
+        <MoneyInput
+          label="Expense recoverable input VAT"
+          value={form.input_tax ?? '0'}
+          onChange={(v) => set('input_tax', v)}
+        />
+      </Field>
       <Field label="Receipt / expense date" required>
         <Input
           type="date"
@@ -452,32 +462,47 @@ export function PurchaseForm({
   onClose,
   onSaved,
   onNewSupplier,
+  replacement,
 }: {
   onClose: () => void;
   onSaved: () => void;
   onNewSupplier?: () => void;
+  replacement?: { purchase: Row; items: Row[] };
 }) {
   const auth = useAuth(),
     a = useAction();
   const supplierQ = useQuery('/suppliers'),
     productQ = useQuery<{ products: Product[] }>('/products');
   const [form, setForm] = useState({
-    supplier_id: '',
-    invoice_ref: '',
-    purchase_date: today(),
+    supplier_id: replacement?.purchase.supplier_id ?? '',
+    invoice_ref: replacement?.purchase.invoice_ref ?? '',
+    purchase_date: replacement?.purchase.purchase_date ?? today(),
+    replaces_id: replacement?.purchase.id ?? null,
+    payment_reference: '',
+    input_tax: numeric(replacement?.purchase.input_tax_cents ?? 0),
     payment_method: 'Credit',
     notes: '',
     document_id: null as string | null,
     reason: '',
   });
-  const [items, setItems] = useState([{ key: crypto.randomUUID(), product_id: '', quantity: 1, cost: '' }]);
+  const [items, setItems] = useState(
+    replacement
+      ? replacement.items.map((i) => ({
+          key: crypto.randomUUID(),
+          product_id: i.product_id,
+          quantity: i.quantity,
+          cost: numeric(i.cost_cents),
+        }))
+      : [{ key: crypto.randomUUID(), product_id: '', quantity: 1, cost: '' }],
+  );
   const set = (key: string, value: unknown) => setForm((f) => ({ ...f, [key]: value }));
-  const total = items.reduce((s, i) => s + (minor(i.cost) ?? 0) * i.quantity, 0);
+  const total =
+    items.reduce((s, i) => s + (minor(i.cost) ?? 0) * i.quantity, 0) + (minor(form.input_tax) ?? 0);
   const update = (key: string, field: string, value: unknown) =>
     setItems((old) => old.map((i) => (i.key === key ? { ...i, [field]: value } : i)));
   return (
     <Modal
-      title="Receive supplier stock"
+      title={replacement ? 'Replace rejected / reversed receiving' : 'Receive supplier stock'}
       description="Each received package creates a stock movement and a recorded inventory cost."
       onClose={onClose}
       wide
@@ -494,7 +519,7 @@ export function PurchaseForm({
               onSaved();
               return result;
             },
-            auth.can('inventory.post')
+            auth.can('inventory.post') && !replacement
               ? 'Purchase posted. Inventory has been updated.'
               : 'Purchase submitted. Stock will update after approval.',
           );
@@ -504,6 +529,13 @@ export function PurchaseForm({
           <Loading />
         ) : (
           <>
+            {replacement && (
+              <Notice tone="amber">
+                The original {replacement.purchase.ref} stays intact. This linked replacement always needs a
+                different administrator’s approval. Enter the actual corrected invoice details; no stock moves
+                yet.
+              </Notice>
+            )}
             <div className="grid-2">
               <Field label="Supplier" required>
                 <select
@@ -554,6 +586,26 @@ export function PurchaseForm({
                 </select>
               </Field>
             </div>
+            {!['Credit', 'Cash'].includes(form.payment_method) && (
+              <Field label="Confirmed electronic payment reference" required>
+                <Input
+                  required
+                  minLength={3}
+                  value={form.payment_reference}
+                  onChange={(e) => set('payment_reference', e.target.value)}
+                />
+              </Field>
+            )}
+            <Field
+              label="Recoverable input VAT on supplier invoice"
+              hint="Enter only accountant-confirmed deductible VAT. Unit costs below exclude this recoverable amount; zero means no claim."
+            >
+              <MoneyInput
+                label="Purchase recoverable input VAT"
+                value={form.input_tax}
+                onChange={(v) => set('input_tax', v)}
+              />
+            </Field>
             <div className="purchase-lines">
               <div className="purchase-lines-heading">
                 <span>PRODUCT</span>
@@ -626,7 +678,7 @@ export function PurchaseForm({
                 Add another product
               </button>
               <div className="purchase-total">
-                <span>Total purchase cost</span>
+                <span>Invoice total payable</span>
                 <strong>{money(total, true)}</strong>
               </div>
             </div>
@@ -640,8 +692,13 @@ export function PurchaseForm({
                   placeholder="Confirm delivery and quantities received"
                 />
               </Field>
-              <Field label="Notes">
-                <Input value={form.notes} onChange={(e) => set('notes', e.target.value)} />
+              <Field label={replacement ? 'Explanation / what changed' : 'Notes'} required={!!replacement}>
+                <Input
+                  required={!!replacement}
+                  minLength={replacement ? 5 : undefined}
+                  value={form.notes}
+                  onChange={(e) => set('notes', e.target.value)}
+                />
               </Field>
               <div className="span-2">
                 <FileUpload
@@ -654,7 +711,7 @@ export function PurchaseForm({
             <div className="margin-top">
               <Notice icon={<ShieldCheck size={18} />}>
                 <strong>
-                  {auth.can('inventory.post')
+                  {auth.can('inventory.post') && !replacement
                     ? 'You are authorised to post receiving.'
                     : 'Another administrator must approve this receipt.'}
                 </strong>{' '}
@@ -669,7 +726,7 @@ export function PurchaseForm({
                 Cancel
               </Button>
               <Button busy={a.busy} type="submit">
-                {auth.can('inventory.post')
+                {auth.can('inventory.post') && !replacement
                   ? 'Post purchase & receive stock'
                   : 'Submit purchase for approval'}
               </Button>

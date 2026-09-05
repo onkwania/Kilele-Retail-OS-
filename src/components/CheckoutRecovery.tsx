@@ -1,6 +1,15 @@
 import { useState } from 'react';
 import { CheckCircle2, RotateCcw, ShieldCheck } from 'lucide-react';
-import { api, clearPendingSubmission, type PendingSubmission, money, minor, dateLabel } from '../lib/api';
+import {
+  api,
+  clearPendingSubmission,
+  type PendingSubmission,
+  type Row,
+  money,
+  minor,
+  dateLabel,
+} from '../lib/api';
+import { financialOperation } from '../../shared/operations';
 import { useQuery, useAction } from '../lib/state';
 import { Modal, Button, Notice, Loading, ErrorState, Field, Input } from './ui';
 export default function CheckoutRecovery({
@@ -18,31 +27,42 @@ export default function CheckoutRecovery({
     a = useAction(),
     [confirmed, setConfirmed] = useState(false),
     [cancelReason, setCancelReason] = useState('');
-  const finish = (id: string) => {
+  const sale = pending.path === '/sales',
+    label = financialOperation(pending.method, pending.path)?.label ?? 'Financial entry';
+  const finish = (result: Row) => {
     clearPendingSubmission(pending.storageKey);
-    onComplete(id);
+    window.dispatchEvent(new Event('records-changed'));
+    onComplete(result.id ?? result.payment?.id ?? result.session?.id ?? '');
+  };
+  const cancel = () => {
+    clearPendingSubmission(pending.storageKey);
+    window.dispatchEvent(new Event('records-changed'));
+    onCancelled();
   };
   return (
     <Modal
-      title="Resolve saved checkout"
-      description={`Submitted ${dateLabel(pending.created_at, true)} · Original transaction intent preserved`}
+      title={sale ? 'Resolve saved checkout' : `Resolve saved ${label.toLowerCase()}`}
+      description={`Submitted ${dateLabel(pending.created_at, true)} · Original intent and key preserved`}
       onClose={() => !a.busy && onClose()}
     >
       <div className="stack">
         <Notice tone="amber">
-          Do not charge the customer again. We’ll check the original submission, or safely retry with its
-          original key. No new transaction intent is created.
+          Do not repeat the physical payment, refund or stock receipt. We’ll verify the original submission or
+          safely retry its exact request. Cancelling software does not return money or undo physical goods
+          movement.
         </Notice>
-        <div className="detail-grid">
-          <div>
-            <label>EXPECTED PAYMENT</label>
-            <strong>{money(minor(pending.body?.expected_total ?? ''), true)}</strong>
+        {sale && (
+          <div className="detail-grid">
+            <div>
+              <label>EXPECTED PAYMENT</label>
+              <strong>{money(minor(pending.body?.expected_total ?? ''), true)}</strong>
+            </div>
+            <div>
+              <label>TENDER METHODS</label>
+              <strong>{pending.body?.payments?.map((p: { method: string }) => p.method).join(' + ')}</strong>
+            </div>
           </div>
-          <div>
-            <label>TENDER METHODS</label>
-            <strong>{pending.body?.payments?.map((p: { method: string }) => p.method).join(' + ')}</strong>
-          </div>
-        </div>
+        )}
         {q.loading ? (
           <Loading label="Checking the original submission…" />
         ) : q.error ? (
@@ -50,65 +70,69 @@ export default function CheckoutRecovery({
         ) : q.data?.state === 'cancelled' ? (
           <>
             <Notice>
-              This software submission was cancelled before posting. No sale or stock movement was created.
-              Return any funds already collected externally.
+              This submission was cancelled before posting. A delayed request with this key cannot post later.
             </Notice>
-            <Button
-              onClick={() => {
-                clearPendingSubmission(pending.storageKey);
-                onCancelled();
-              }}
-            >
-              Return to POS
-            </Button>
+            <Button onClick={cancel}>Return to workspace</Button>
           </>
         ) : q.data?.state === 'posted' ? (
           <>
             <Notice>
               <CheckCircle2 size={15} />
-              <strong>The original sale was saved successfully.</strong> Your stock and payment entries are
-              already recorded. There is nothing to post again.
+              <strong>The original {sale ? 'sale' : 'entry'} was saved successfully.</strong> Its ledger
+              effects are already recorded. Nothing will be posted again.
             </Notice>
-            <Button onClick={() => finish(q.data!.result.id)}>
+            <Button onClick={() => finish(q.data!.result)}>
               <ShieldCheck size={15} />
-              Open saved receipt
+              {sale ? 'Open saved receipt' : 'Confirm saved entry'}
             </Button>
           </>
         ) : (
           <>
             <Notice>
-              No completed record has been found for this key. Retrying the identical request is safe even if
-              the original reaches the server later.
+              No completed record has been found for this key. An identical retry is safe even if the original
+              reaches the server later.
             </Notice>
-            <label className="checkbox-label">
-              <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />I
-              have verified the original payment and customer details.
-            </label>
-            {a.error && <p className="form-error">{a.error}</p>}
-            <Button
-              disabled={!confirmed}
-              busy={a.busy}
-              onClick={() =>
-                void a.run(async () => {
-                  const result = await api('/sales', {
-                    method: 'POST',
-                    key: pending.key,
-                    body: pending.body,
-                  });
-                  finish(result.id);
-                }, 'Original checkout confirmed.')
-              }
-            >
-              <RotateCcw size={15} />
-              Retry exact saved checkout
-            </Button>
+            {pending.body ? (
+              <>
+                <label className="checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={confirmed}
+                    onChange={(e) => setConfirmed(e.target.checked)}
+                  />
+                  I verified the original physical transaction and recorded details.
+                </label>
+                <Button
+                  disabled={!confirmed}
+                  busy={a.busy}
+                  onClick={() =>
+                    void a.run(async () => {
+                      const result = await api(pending.path, {
+                        method: pending.method,
+                        key: pending.key,
+                        body: pending.body,
+                      });
+                      finish(result);
+                    }, 'Original submission confirmed.')
+                  }
+                >
+                  <RotateCcw size={15} />
+                  {sale ? 'Retry exact saved checkout' : 'Retry exact saved entry'}
+                </Button>
+              </>
+            ) : (
+              <Notice tone="amber">
+                This older client saved only a key, not its request body. Do not create a replacement. Inspect
+                the original history. Cancel this unused key safely before entering a fresh, verified record.
+              </Notice>
+            )}
             <details className="full-record">
               <summary>Or cancel this unposted submission safely</summary>
               <div className="stack margin-top">
                 <Notice>
-                  Cancellation reserves the original key so a delayed request cannot post later. It does not
-                  refund any money received outside this system. If the sale already posted, its receipt will
-                  open instead.
+                  Cancellation reserves its original key. If it has already posted, the saved result is
+                  confirmed instead. Posted records can only be corrected through the normal approval
+                  workflow.
                 </Notice>
                 <Field label="Reason for cancelling" required>
                   <Input
@@ -125,14 +149,16 @@ export default function CheckoutRecovery({
                     void a.run(async () => {
                       const result = await api(`/operations/${pending.key}/cancel`, {
                         method: 'POST',
-                        body: { original: pending.body, reason: cancelReason },
+                        body: {
+                          original: pending.body,
+                          reason: cancelReason,
+                          method: pending.method,
+                          path: pending.path,
+                        },
                       });
-                      if (result.state === 'posted') finish(result.result.id);
-                      else {
-                        clearPendingSubmission(pending.storageKey);
-                        onCancelled();
-                      }
-                    }, 'Original submission resolved. No duplicate sale can post.')
+                      if (result.state === 'posted') finish(result.result);
+                      else cancel();
+                    }, 'Submission resolved without duplicate posting.')
                   }
                 >
                   Cancel without posting
@@ -141,9 +167,16 @@ export default function CheckoutRecovery({
             </details>
           </>
         )}
+        {a.error && <p className="form-error">{a.error}</p>}
         <details className="full-record">
           <summary>Inspect original submission</summary>
-          <pre className="json-state">{JSON.stringify(pending.body, null, 2)}</pre>
+          <pre className="json-state">
+            {JSON.stringify(
+              pending.body ?? { key: pending.key, path: pending.path, body: 'Not saved by the older client' },
+              null,
+              2,
+            )}
+          </pre>
         </details>
       </div>
     </Modal>

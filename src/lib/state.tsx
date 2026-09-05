@@ -25,7 +25,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const data = await api('/auth/me');
       setCsrf(data.csrf ?? '');
-      setApiActor(data.user?.id ?? null);
+      setApiActor(data.user ?? null);
       setState({
         user: data.user,
         business: data.business,
@@ -49,7 +49,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         if (active) {
           setCsrf(data.csrf ?? '');
-          setApiActor(data.user?.id ?? null);
+          setApiActor(data.user ?? null);
           setState({
             user: data.user,
             business: data.business,
@@ -117,8 +117,14 @@ export function useQuery<T = Row>(path: string | null, deps: unknown[] = []) {
   const [data, setData] = useState<T | null>(null),
     [loading, setLoading] = useState(true),
     [error, setError] = useState(''),
-    [version, setVersion] = useState(0);
+    [version, setVersion] = useState(0),
+    [resolvedPath, setResolvedPath] = useState<string | null>(null);
   const depKey = JSON.stringify(deps);
+  useEffect(() => {
+    const refresh = () => setVersion((v) => v + 1);
+    window.addEventListener('records-changed', refresh);
+    return () => window.removeEventListener('records-changed', refresh);
+  }, []);
   useEffect(() => {
     if (!path) {
       setLoading(false);
@@ -129,11 +135,15 @@ export function useQuery<T = Row>(path: string | null, deps: unknown[] = []) {
     setError('');
     api<T>(path, { signal: abort.signal })
       .then((result) => {
+        if (abort.signal.aborted) return;
         setData(result);
+        setResolvedPath(path);
         setLoading(false);
       })
       .catch((e) => {
-        if (e.name !== 'AbortError') {
+        if (e.name !== 'AbortError' && !abort.signal.aborted) {
+          setResolvedPath(path);
+          setData(null);
           setError(e.message);
           setLoading(false);
         }
@@ -141,7 +151,16 @@ export function useQuery<T = Row>(path: string | null, deps: unknown[] = []) {
     return () => abort.abort();
   }, [path, version, depKey]);
   const refresh = useCallback(() => setVersion((v) => v + 1), []);
-  return { data, loading, error, refresh, setData };
+  return {
+    data: resolvedPath === path ? data : null,
+    loading: !!path && (loading || resolvedPath !== path),
+    error: resolvedPath === path ? error : '',
+    refresh,
+    setData: (value: T | null) => {
+      setData(value);
+      setResolvedPath(path);
+    },
+  };
 }
 export function useAction() {
   const running = useRef(false);

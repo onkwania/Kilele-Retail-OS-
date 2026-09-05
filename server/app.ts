@@ -5,6 +5,7 @@ import cookieParser from 'cookie-parser';
 import { rateLimit } from 'express-rate-limit';
 import { ZodError, z } from 'zod';
 import { mutate } from './mutate.js';
+import { financialOperation } from '../shared/operations.js';
 import {
   type DB,
   AppError,
@@ -17,6 +18,7 @@ import {
   now,
   audit,
   reasonInput,
+  demand,
 } from './core.js';
 import { installManagement } from './management.js';
 import { installReports } from './reports.js';
@@ -38,6 +40,25 @@ export function createApp(db: DB, options: AppOptions = {}) {
     throw new Error('Refusing production startup: PREVIEW_MODE must be disabled.');
   if (options.production && (!options.origin || !options.origin.startsWith('https://')))
     throw new Error('Production requires an HTTPS APP_ORIGIN.');
+  if (options.production) {
+    let valid = false;
+    try {
+      const origin = new URL(options.origin!);
+      valid =
+        origin.protocol === 'https:' &&
+        origin.origin === options.origin &&
+        !origin.username &&
+        !origin.password &&
+        !origin.search &&
+        !origin.hash;
+    } catch {
+      /* invalid origin */
+    }
+    if (!valid)
+      throw new Error(
+        'APP_ORIGIN must be an exact HTTPS origin, without credentials, path, query or trailing slash.',
+      );
+  }
   guardEnvironment(db, options.preview ?? false, options.production ?? false);
   const app = express();
   app.disable('x-powered-by');
@@ -79,17 +100,25 @@ export function createApp(db: DB, options: AppOptions = {}) {
     production: options.production ?? false,
     origin: options.origin,
   });
-  app.get('/api/health', (_req, res) => res.json({ status: 'ok', currency: 'KES' }));
-  app.get('/api/integrity', protect('audit.read'), (_req, res) => res.json(integrity(db)));
-  app.get('/api/operations/:key', protect('sales.create'), (req, res) => {
+  app.get('/api/health', (_req, res) => {
+    one(db, 'SELECT 1 value');
+    res.json({ status: 'ok', currency: 'KES', database: 'available' });
+  });
+  app.get('/api/integrity', protect('audit.read'), (req, res) => res.json(integrity(db, req.actor)));
+  app.get('/api/operations/:key', protect(), (req, res) => {
     const row = one(
       db,
-      "SELECT route,response_json,created_at FROM idempotency_keys WHERE user_id=? AND business_id=? AND branch_id=? AND key=? AND route='POST /api/sales'",
+      'SELECT route,response_json,created_at FROM idempotency_keys WHERE user_id=? AND business_id=? AND branch_id=? AND key=?',
       req.actor.id,
       req.actor.business_id,
       req.actor.branch_id,
       req.params.key,
     );
+    if (row) {
+      const rule = financialOperation(row.route.split(' ')[0], row.route.split(' ')[1].replace(/^\/api/, ''));
+      requireThat(rule, 'This operation is not a recoverable financial submission.', 404);
+      demand(req.actor, rule.permission);
+    }
     const result = row ? JSON.parse(row.response_json) : null;
     res.json(
       row
@@ -97,12 +126,21 @@ export function createApp(db: DB, options: AppOptions = {}) {
         : { state: 'not_found' },
     );
   });
-  app.post('/api/operations/:key/cancel', protect('sales.create'), (req, res) => {
+  app.post('/api/operations/:key/cancel', protect(), (req, res) => {
     const key = String(req.params.key),
       body = z
-        .object({ original: z.record(z.string(), z.unknown()), reason: reasonInput })
+        .object({
+          original: z.record(z.string(), z.unknown()).optional(),
+          reason: reasonInput,
+          method: z.literal('POST').default('POST'),
+          path: z.string().max(200).default('/sales'),
+        })
         .strict()
         .parse(req.body);
+    const rule = financialOperation(body.method, body.path);
+    requireThat(rule, 'Unsupported financial submission.', 400);
+    demand(req.actor, rule.permission);
+    const originalRoute = `${body.method} /api${body.path}`;
     requireThat(
       /^[\w-]{16,100}$/.test(key) && key !== req.headers['idempotency-key'],
       'Use distinct valid keys for the original sale and the cancellation.',
@@ -115,10 +153,15 @@ export function createApp(db: DB, options: AppOptions = {}) {
             req.actor.id,
             key,
           ),
-          hash = sha(JSON.stringify(body.original));
+          hash = sha(body.original ? JSON.stringify(body.original) : `cancelled-key:${key}`);
         if (previous) {
           requireThat(
-            previous.route === 'POST /api/sales' && previous.request_hash === hash,
+            previous.business_id === req.actor.business_id &&
+              previous.branch_id === req.actor.branch_id &&
+              previous.route === originalRoute &&
+              (body.original === undefined ||
+                JSON.parse(previous.response_json).cancelled ||
+                previous.request_hash === hash),
             'This key belongs to a different submission.',
             409,
           );
@@ -129,7 +172,7 @@ export function createApp(db: DB, options: AppOptions = {}) {
           ...scope(req.actor),
           user_id: req.actor.id,
           key,
-          route: 'POST /api/sales',
+          route: originalRoute,
           request_hash: hash,
           response_json: JSON.stringify({ cancelled: true, reason: body.reason }),
           created_at: now(),
@@ -137,7 +180,7 @@ export function createApp(db: DB, options: AppOptions = {}) {
         audit(
           db,
           req.actor,
-          'checkout.cancelled_unposted',
+          'submission.cancelled_unposted',
           'idempotency_keys',
           key,
           null,

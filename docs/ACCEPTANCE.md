@@ -1,4 +1,6 @@
-# Verification record — 5 September 2026
+# First-pass verification record — 5 September 2026
+
+**Historical checkpoint.** The current second-pass results and remaining production gates are in [SECOND_PASS_AUDIT.md](SECOND_PASS_AUDIT.md) and [SECOND_PASS_VERIFICATION.json](SECOND_PASS_VERIFICATION.json).
 
 ## Verified in this workspace
 

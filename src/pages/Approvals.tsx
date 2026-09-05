@@ -119,6 +119,12 @@ export function ApprovalDetail({
             Original record · preserved
           </h3>
           <OriginalRecord value={original} />
+          {original?.replaces_original && (
+            <section className="detail-section">
+              <h3>Linked original purchase — preserved</h3>
+              <OriginalRecord value={original.replaces_original} />
+            </section>
+          )}
         </section>
         {Object.keys(payload).length > 0 && r.kind !== 'other' && (
           <section className="requested-payload">

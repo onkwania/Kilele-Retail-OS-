@@ -1,3 +1,4 @@
+import { financialOperation, validFinancialResult } from '../../shared/operations';
 export type Row = Record<string, any>;
 export type User = {
   id: string;
@@ -18,6 +19,9 @@ export type Product = {
   subcategory: string;
   sku: string;
   barcode: string | null;
+  barcodes?: string[];
+  source_status?: string;
+  package_status?: string;
   size: string;
   unit: string;
   supplier_id: string | null;
@@ -42,11 +46,14 @@ export type Product = {
 };
 let csrf = '';
 let actorScope = 'anonymous';
+let legacyScope = 'anonymous';
 export const setCsrf = (value: string) => {
   csrf = value;
 };
-export const setApiActor = (value: string | null) => {
-  actorScope = value ?? 'anonymous';
+export const setApiActor = (value: Pick<User, 'id' | 'business_id' | 'branch_id'> | string | null) => {
+  legacyScope = typeof value === 'string' ? value : (value?.id ?? 'anonymous');
+  actorScope =
+    typeof value === 'object' && value ? `${value.id}:${value.business_id}:${value.branch_id}` : legacyScope;
 };
 export class ApiError extends Error {
   constructor(
@@ -76,22 +83,30 @@ function readPending(key: string): PendingSubmission | null {
   }
   return pendingMemory.get(key) ?? null;
 }
-export function getPendingSale(): PendingSubmission | null {
-  const prefix = pendingPrefix();
+export function getPendingSubmissions(): PendingSubmission[] {
+  const prefix = pendingPrefix(),
+    legacy = `kilele-submission:${legacyScope}:`;
+  const matches = (key: string) =>
+    key.startsWith(prefix) || (key.startsWith(legacy) && /^[a-f0-9]{64}$/.test(key.slice(legacy.length)));
+  const records = new Map<string, PendingSubmission>();
+  for (const record of pendingMemory.values())
+    if (matches(record.storageKey) && financialOperation(record.method, record.path))
+      records.set(record.storageKey, record);
   try {
     for (let i = 0; i < sessionStorage.length; i++) {
       const key = sessionStorage.key(i)!;
-      if (key.startsWith(prefix)) {
-        const p = readPending(key);
-        if (p?.path === '/sales') return p;
+      if (matches(key)) {
+        const record = readPending(key);
+        if (record && financialOperation(record.method, record.path)) records.set(key, record);
       }
     }
   } catch {
-    /* Fall back to the current tab. */
+    /* Restricted storage: never silently discard an in-memory pending entry. */
   }
-  return (
-    [...pendingMemory.values()].find((p) => p.storageKey.startsWith(prefix) && p.path === '/sales') ?? null
-  );
+  return [...records.values()].sort((a, b) => a.created_at.localeCompare(b.created_at));
+}
+export function getPendingSale(): PendingSubmission | null {
+  return getPendingSubmissions().find((p) => p.path === '/sales') ?? null;
 }
 export function clearPendingSubmission(key: string) {
   try {
@@ -121,12 +136,19 @@ export async function api<T = Row>(
       Array.from(new Uint8Array(digest))
         .map((b) => b.toString(16).padStart(2, '0'))
         .join('');
-    const pending = path === '/sales' ? getPendingSale() : null;
+    const financial = financialOperation(method, path);
+    const pending = financial ? getPendingSubmissions()[0] : null;
+    const saved =
+      readPending(storageKey) ??
+      getPendingSubmissions().find((p) =>
+        p.storageKey.endsWith(storageKey.slice(storageKey.lastIndexOf(':'))),
+      );
+    if (saved) storageKey = saved.storageKey;
     if (pending && pending.storageKey !== storageKey)
       throw new ApiError(
-        'Resolve the saved checkout before starting a different sale.',
+        'Resolve the saved financial submission before posting a different entry.',
         409,
-        'PENDING_CHECKOUT',
+        path === '/sales' ? 'PENDING_CHECKOUT' : 'PENDING_SUBMISSION',
       );
     const previous = readPending(storageKey);
     hadPending = !!previous;
@@ -136,17 +158,17 @@ export async function api<T = Row>(
       key: submissionKey,
       path,
       method,
-      created_at: new Date().toISOString(),
-      ...(path === '/sales' ? { body: options.body as Row } : {}),
+      created_at: previous?.created_at ?? new Date().toISOString(),
+      ...(financial ? { body: options.body as Row } : {}),
     };
     pendingMemory.set(storageKey, record);
     try {
       sessionStorage.setItem(storageKey, JSON.stringify(record));
     } catch {
-      if (path === '/sales') {
+      if (financial) {
         pendingMemory.delete(storageKey);
         throw new ApiError(
-          'Checkout requires browser session storage for safe recovery. Enable storage and try again before accepting payment.',
+          'Financial posting requires browser session storage for safe recovery. Enable storage before posting.',
           400,
           'STORAGE_REQUIRED',
         );
@@ -177,6 +199,12 @@ export async function api<T = Row>(
     if (response.status >= 500)
       throw new ApiError(
         data.error ?? 'The server could not confirm the outcome. Retry this same submission safely.',
+        response.status,
+        'OUTCOME_UNKNOWN',
+      );
+    if (response.ok && !validFinancialResult(method, path, data))
+      throw new ApiError(
+        'The server returned an incomplete confirmation. The original submission is preserved; verify its outcome before retrying.',
         response.status,
         'OUTCOME_UNKNOWN',
       );
@@ -328,3 +356,18 @@ export const isReady = (p: Product) =>
   p.tax_mode !== 'unset' &&
   p.stock > 0 &&
   p.size;
+
+/** Barcode match takes precedence over SKU; never auto-pick an ambiguous folded code. */
+export function resolveScan<T extends { barcode: string | null; barcodes?: string[]; sku: string }>(
+  products: T[],
+  text: string,
+): T | null {
+  const code = text.trim();
+  if (!code) return null;
+  const exactBarcode = products.filter((p) => (p.barcodes ?? (p.barcode ? [p.barcode] : [])).includes(code));
+  if (exactBarcode.length) return exactBarcode.length === 1 ? exactBarcode[0] : null;
+  const exactSku = products.filter((p) => p.sku === code);
+  if (exactSku.length) return exactSku.length === 1 ? exactSku[0] : null;
+  const folded = products.filter((p) => p.sku.toLowerCase() === code.toLowerCase());
+  return folded.length === 1 ? folded[0] : null;
+}

@@ -49,7 +49,8 @@ export default function Dashboard() {
   const navigate = useNavigate(),
     auth = useAuth();
   const [range, setRange] = useState({ from: daysAgo(6), to: today() }),
-    [metric, setMetric] = useState('sales');
+    [metric, setMetric] = useState('sales'),
+    [productView, setProductView] = useState('best_selling');
   const q = useQuery('/dashboard?' + queryString(range));
   if (q.loading && !q.data)
     return (
@@ -71,6 +72,18 @@ export default function Dashboard() {
   if (q.error) return <ErrorState error={q.error} retry={q.refresh} />;
   if (!q.data) return null;
   const d = q.data;
+  const productRows: Row[] = d[productView] ?? [];
+  const financial = [
+    ['Revenue (ex-tax)', money(d.summary.revenue_cents, true)],
+    ['Recorded COGS', money(d.summary.cogs_cents, true)],
+    ['Gross profit', money(d.summary.profit_cents, true)],
+    ['Gross margin', d.summary.gross_margin == null ? '—' : d.summary.gross_margin.toFixed(2) + '%'],
+    ['Expenses', money(d.summary.expenses_cents, true)],
+    ['Other approved costs', money(d.summary.other_costs_cents, true)],
+    ['Net operating result', money(d.summary.operating_cents, true)],
+    ['Transactions', String(d.summary.transactions)],
+    ['Average transaction', d.summary.transactions ? money(d.summary.average_cents, true) : '—'],
+  ];
   const setupCount =
     1 + (d.setup.priced > 0 ? 1 : 0) + (d.setup.stocked > 0 ? 1 : 0) + (d.setup.sales > 0 ? 1 : 0);
   const cards = [
@@ -131,6 +144,13 @@ export default function Dashboard() {
       path: '/inventory?filter=low',
     },
     {
+      label: 'Out-of-stock items',
+      value: String(d.inventory.out_of_stock),
+      icon: Package,
+      note: 'Current active catalogue',
+      path: '/inventory?filter=out',
+    },
+    {
       label: 'Pending approvals',
       value: String(d.pending),
       icon: ShieldCheck,
@@ -141,7 +161,7 @@ export default function Dashboard() {
       label: 'Cash variance',
       value: money(d.cash_variance_cents),
       icon: Scale,
-      note: 'Submitted closing balances',
+      note: 'Closing counts in selected period',
       path: '/reconciliation',
     },
   ];
@@ -243,6 +263,24 @@ export default function Dashboard() {
         </h2>
         <RangeControl range={range} onChange={setRange} />
       </div>
+      <Panel
+        title="Selected-period financials"
+        subtitle={`${dateLabel(range.from)} to ${dateLabel(range.to)} · Recorded events, returns on posting dates`}
+        className="period-panel"
+      >
+        <div className="period-financial-grid">
+          {financial.map(([label, value]) => (
+            <div key={label}>
+              <small>{label}</small>
+              <strong className="money">{value}</strong>
+            </div>
+          ))}
+        </div>
+        <p className="table-note">
+          Inventory indicators above are current balances. Operating result includes approved stock/cash
+          adjustments; it is not a statutory tax return.
+        </p>
+      </Panel>
       <div className="dashboard-charts">
         <Panel
           className="sales-chart-panel"
@@ -278,7 +316,7 @@ export default function Dashboard() {
           <div className="chart-footer">
             <div>
               <span className="legend-dot forest" />
-              {metric === 'sales' ? 'Net sales' : 'Gross profit'}{' '}
+              {metric === 'sales' ? 'Net collections (incl. tax)' : 'Gross profit'}{' '}
               {metric === 'sales' && (
                 <>
                   <span className="legend-dot gold" />
@@ -293,10 +331,15 @@ export default function Dashboard() {
         </Panel>
         <Panel
           title="Payment breakdown"
-          subtitle="Every shilling, in the right place."
+          subtitle="Sale collections and customer refunds in this period."
           className="payment-panel"
         >
           <PaymentRing data={d.payments} total={d.summary.gross_cents} />
+          {d.payments.some((p: Row) => p.amount_cents < 0) && (
+            <p className="table-note">
+              Negative amounts are net refunds. The ring shows positive net tenders only.
+            </p>
+          )}
           <div className="payment-legend">
             {Object.entries(PAYMENT_COLORS).map(([method, color]) => {
               const row = d.payments.find((r: Row) => r.method === method);
@@ -306,7 +349,7 @@ export default function Dashboard() {
                   <span>{method}</span>
                   <strong>{money(row?.amount_cents ?? 0)}</strong>
                   <small>
-                    {d.summary.gross_cents > 0
+                    {d.summary.gross_cents > 0 && !d.payments.some((p: Row) => p.amount_cents < 0)
                       ? `${Math.round(((row?.amount_cents ?? 0) / d.summary.gross_cents) * 100)}%`
                       : '—'}
                   </small>
@@ -318,27 +361,49 @@ export default function Dashboard() {
       </div>
       <div className="dashboard-mid">
         <Panel
-          title="Your best sellers"
-          subtitle="The products moving your business forward."
+          title="Product performance"
+          subtitle="Recorded net units, revenue and comparable-period movement."
           action={
             <button className="text-button" onClick={() => navigate('/reports?type=profit')}>
               View report <ArrowUpRight size={14} />
             </button>
           }
         >
+          <div className="product-performance-controls">
+            <label>
+              View{' '}
+              <select
+                aria-label="Product performance view"
+                value={productView}
+                onChange={(e) => setProductView(e.target.value)}
+              >
+                <option value="best_selling">Best sellers · units</option>
+                <option value="top_products">Highest revenue</option>
+                <option value="highest_margin">Highest margin</option>
+                <option value="slow_moving">Slow movers · no net sales</option>
+                <option value="declining">Declining · previous equal period</option>
+              </select>
+            </label>
+          </div>
           <div className="mini-table-wrap">
             <table className="data-table mini-table">
               <thead>
                 <tr>
                   <th>Product</th>
-                  <th>Units sold</th>
-                  <th>Net revenue</th>
-                  <th>Margin</th>
+                  <th>
+                    {productView === 'declining'
+                      ? 'Previous units'
+                      : productView === 'slow_moving'
+                        ? 'On hand'
+                        : 'Net units'}
+                  </th>
+                  <th>{productView === 'declining' ? 'Current net units' : 'Net revenue'}</th>
+                  <th>{productView === 'declining' ? 'Unit change' : 'Margin'}</th>
                 </tr>
               </thead>
               <tbody>
-                {d.top_products.map((p: Row, i: number) => (
-                  <tr key={p.product_id}>
+                {productRows.map((p: Row, i: number) => (
+                  <tr key={p.product_id ?? p.id}>
                     <td>
                       <div className="product-mini">
                         <span className="rank-number">{String(i + 1).padStart(2, '0')}</span>
@@ -350,19 +415,37 @@ export default function Dashboard() {
                         </span>
                       </div>
                     </td>
-                    <td>{p.quantity}</td>
-                    <td className="money">{money(p.revenue_cents)}</td>
-                    <td>{p.margin == null ? '—' : p.margin.toFixed(1) + '%'}</td>
+                    <td>
+                      {productView === 'declining'
+                        ? p.previous_quantity
+                        : productView === 'slow_moving'
+                          ? p.stock
+                          : p.quantity}
+                    </td>
+                    <td className="money">
+                      {productView === 'declining'
+                        ? p.current_quantity
+                        : productView === 'slow_moving'
+                          ? 'No net sales'
+                          : money(p.revenue_cents)}
+                    </td>
+                    <td>
+                      {productView === 'declining'
+                        ? p.current_quantity - p.previous_quantity
+                        : p.margin == null
+                          ? '—'
+                          : p.margin.toFixed(1) + '%'}
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-            {!d.top_products.length && (
+            {!productRows.length && (
               <Empty
                 compact
                 icon={<ChartNoAxesCombined size={23} />}
                 title="Good things are waiting on your shelf."
-                description="Your best-selling products will appear here once sales begin."
+                description="No products match this performance view in the selected period. Stocked products without net sales appear under Slow movers."
                 action={
                   <button className="text-button" onClick={() => navigate('/products')}>
                     Explore your catalogue <ArrowRight size={14} />

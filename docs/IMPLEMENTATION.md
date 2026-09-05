@@ -62,3 +62,11 @@ Compiled bootstrap/check/backup/restore commands passed a fresh-path round-trip.
 Final verification output and the current limitations are recorded in `docs/ACCEPTANCE.md`. These checks do not establish an external security audit, tax certification, hardware acceptance, cloud deployment or configured off-site recovery. Production requires the owner-led checklist in `docs/DEPLOYMENT.md`.
 
 Final checkpoint: 2026-09-05 13:10:35 UTC. All 55 tests, five real-browser scenarios, typecheck, lint, build, format check, database integrity and runtime dependency audit passed. A final filesystem review found and corrected overly broad default SQLite file modes: application database/WAL/SHM files are now owner-only, with a dedicated regression test. No real prices, stock or financial entries were inserted into the main preview. Remaining deployment/business boundaries are explicit in the acceptance and deployment guides.
+
+## Second-pass audit — existing implementation retained
+
+Starting from `1731254`, the complete source/configuration/test tree was re-inventoried and every requested baseline command executed successfully (55 tests, five browser scenarios). Reproduced gaps were classified before implementation. The second pass extends the same engines and closes the owned code/control gaps described in `SECOND_PASS_AUDIT.md`; it does not introduce a replacement POS architecture.
+
+The expanded suite contains 86 tests across 18 files and eight browser scenarios, including accountant HTTP operations/denials, old-schema preservation/failed-upgrade rollback, exact VAT/zero-cent allocations, non-POS unknown outcomes, real receipt identity/layouts, barcode/XSS behaviour, branch/provenance attacks, and backup publication/copy races. Lint findings in newly added test imports were fixed and the complete verify chain re-run. See `SECOND_PASS_VERIFICATION.json` for actual command outcomes rather than treating this note as proof.
+
+The public evaluation data remains unpriced/unstocked; no synthetic financial fixtures were copied into it. Fiscal/provider integration and physical/site/off-site recovery acceptance remain explicit external P1 gates. The current recommendation is conditional software acceptance, not unconditional production go-live.

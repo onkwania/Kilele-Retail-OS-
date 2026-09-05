@@ -60,6 +60,7 @@ export default function Reports() {
       brand: '',
       supplier: '',
       payment: '',
+      source: '',
     }),
     [advanced, setAdvanced] = useState(false),
     [applied, setApplied] = useState<Row>({
@@ -80,7 +81,7 @@ export default function Reports() {
     }
   }, [meta.data, type]);
   useEffect(() => {
-    setFilters({ staff: '', product: '', category: '', brand: '', supplier: '', payment: '' });
+    setFilters({ staff: '', product: '', category: '', brand: '', supplier: '', payment: '', source: '' });
     setApplied({ type, from: range.from, to: range.to });
   }, [type]);
   const setFilter = (k: string, v: string) => setFilters((old) => ({ ...old, [k]: v }));
@@ -98,8 +99,8 @@ export default function Reports() {
     sales: ['total_cents'],
     profit: ['revenue_cents', 'cogs_cents', 'profit_cents'],
     inventory: ['stock_value_cents'],
-    expenses: ['amount_cents'],
-    purchases: ['total_cents'],
+    expenses: ['amount_cents', 'input_tax_cents', 'expense_cents'],
+    purchases: ['total_cents', 'invoice_tax_cents', 'invoice_payable_cents'],
     payments: ['amount_cents'],
     journal: ['debit_cents', 'credit_cents'],
     staff: ['sales_cents'],
@@ -219,6 +220,17 @@ export default function Reports() {
                       onChange={(e) => setRange((old) => ({ ...old, to: e.target.value }))}
                     />
                   </Field>
+                  {has('source') && (
+                    <Field label="Money movement source">
+                      <select value={filters.source} onChange={(e) => setFilter('source', e.target.value)}>
+                        <option value="">All sources</option>
+                        <option value="sale">Sales / customer refunds</option>
+                        <option value="expense">Expenses / reversals</option>
+                        <option value="supplier">Supplier settlements / refunds</option>
+                        <option value="adjustment">Approved cash variance</option>
+                      </select>
+                    </Field>
+                  )}
                   {has('category') && (
                     <Field label="Category">
                       <Input
@@ -272,6 +284,7 @@ export default function Reports() {
                         brand: '',
                         supplier: '',
                         payment: '',
+                        source: '',
                       })
                     }
                   >

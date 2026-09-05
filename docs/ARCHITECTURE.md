@@ -8,7 +8,7 @@
 
 ## Authentication and permissions
 
-Passwords use salted scrypt. Login has rate limiting and per-email lockout. Sessions use opaque random tokens stored hashed in the database, 12-hour expiry, HttpOnly cookies, CSRF tokens, origin checks and password/session revocation.
+New passwords use salted, versioned scrypt (N=131072, r=8, p=1). Legacy hashes are verified and upgraded after successful authentication; malformed hashes fail closed. Login has rate limiting and per-email lockout. Sessions use opaque random tokens stored hashed in the database, 12-hour expiry, HttpOnly cookies, CSRF tokens, origin checks and password/session revocation.
 
 | Role             | Principal scope                                                                                         |
 | ---------------- | ------------------------------------------------------------------------------------------------------- |
@@ -30,15 +30,15 @@ Mutations run inside immediate database transactions. Durable keys are scoped to
 
 Checkout records historical package/name/price/tax/discount/weighted-average-cost snapshots, payment references/change, stock movements and balanced journals. Later product edits do not recalculate those values. Buying costs are omitted from cashier DTOs; `cost_configured` is a non-sensitive readiness flag.
 
-The client keeps actor-scoped exact-body pending keys in session storage. Checkout additionally preserves its original body, blocks a different sale until resolved, and exposes committed-result lookup. Unposted cancellation stores an immutable tombstone in the same immediate transaction domain; a delayed identical sale cannot cross that cancellation. Previously uncertain keys survive a failed CSRF/permission retry.
+The client keeps business/branch/user-scoped exact-body pending keys and financial request bodies in session storage. A pending financial action blocks a different financial posting until resolved. The existing outcome lookup/cancellation API now covers checkout, expenses, purchases, supplier payments, stock/session entries and approval actions. Legacy body-less keys can be safely cancelled if unposted; successful but malformed JSON confirmations do not erase recovery keys. Unposted cancellation stores an immutable tombstone in the same immediate transaction domain; a delayed identical sale cannot cross that cancellation. Previously uncertain keys survive a failed CSRF/permission retry.
 
 ## Main journal semantics
 
 - Opening stock: Dr Inventory / Cr Opening equity.
-- Supplier receipt: Dr Inventory / Cr Accounts payable.
+- Supplier receipt: Dr net Inventory and any explicitly recorded Input VAT / Cr gross Accounts payable.
 - Supplier settlement: Dr Accounts payable / Cr tender account.
 - Sale: Dr tender accounts / Cr Sales revenue + Output VAT; Dr COGS / Cr Inventory.
-- Expense: Dr expense category / Cr tender account.
+- Expense: Dr net expense category and any explicitly recorded Input VAT / Cr gross tender amount.
 - Sale return: reverse the recorded cumulative price/tax/COGS and append refund/restock entries.
 - Purchase return: unwind payable and net settlements, remove stock at current WAC, and explicitly journal valuation differences.
 - Stock count/loss: append inventory and inventory-adjustment counterpart entries.
@@ -56,7 +56,7 @@ No universal “edit historical transaction” endpoint exists. Sale/expense/pur
 
 `/api/dashboard`, `/api/analytics/staff` and `/api/reports/:type` read recorded ledger events. Refunds and reversals appear on their posting dates, with original-sales attribution where appropriate. Inventory history reconstructs movement balances. Reports reject unsupported filters, avoid split-payment line multiplication, limit projections and audit exports. CSV defends against spreadsheet formulas; PDF is paginated.
 
-Audit rows contain actor/role/entity/time/before/after/reason/IP/device/approval link and a SHA-256 chain. Integrity checks validate SQLite/FKs, journal balance, inventory movements and the audit chain. The initial schema and migrations are in `server/schema.sql` / `server/db.ts`; the immutable preview/operational marker is enforced before startup.
+Audit rows contain actor/role/entity/time/before/after/reason/IP/device/approval link and a SHA-256 chain. Integrity checks validate SQLite/FKs, journal balance, inventory movements and the audit chain. Schema versions 2/3 migrate existing field values and child references without rewriting them; schema reconstruction and all guards commit together or roll back. The schema/migrations are in `server/schema.sql`, `server/db.ts` and `server/migrations.ts`; the immutable preview/operational marker is enforced before startup.
 
 ## Auren / AI boundary
 
@@ -68,4 +68,4 @@ The application protects ordinary and administrator users from unauthorised appl
 
 Files are private, purpose/owner/role scoped and limited to 3 MB with MIME/signature checks, sanitised names and restrictive direct-response CSP. This is not content disarm or malware scanning. Session/login endpoints are rate-limited in one process; use appropriate ingress controls rather than scaling this process horizontally.
 
-The app records manually verified tenders/refunds. It is not a payment gateway, certified fiscal invoicing system, tax adviser or automated misconduct detector.
+Input VAT is a manually entered accounting claim, not verification of deductibility or a filed VAT return. The app records manually verified tenders/refunds. It is not a payment gateway, certified fiscal invoicing system, tax adviser or automated misconduct detector.

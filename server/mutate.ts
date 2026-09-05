@@ -15,20 +15,30 @@ export function mutate<T extends Row>(db: DB, req: Request, action: () => T): T 
       const previous = one(db, 'SELECT * FROM idempotency_keys WHERE user_id=? AND key=?', req.actor.id, key);
       if (previous) {
         requireThat(
+          previous.business_id === req.actor.business_id && previous.branch_id === req.actor.branch_id,
+          'This submission belongs to another workspace. It cannot be replayed here.',
+          403,
+        );
+        const saved = JSON.parse(previous.response_json);
+        if (saved.cancelled)
+          throw new AppError(
+            409,
+            'This submission was safely cancelled before posting. Create a new entry if needed.',
+            'SUBMISSION_CANCELLED',
+          );
+        requireThat(
           previous.route === route && previous.request_hash === fingerprint,
           'This submission key was already used for different data.',
           409,
         );
-        const saved = JSON.parse(previous.response_json);
-        if (saved.cancelled && previous.route === 'POST /api/sales')
-          throw new AppError(
-            409,
-            'This checkout was safely cancelled before posting. Start a new sale if needed.',
-            'SUBMISSION_CANCELLED',
-          );
         return saved as T;
       }
       const response = action();
+      requireThat(
+        !response || typeof response.then !== 'function',
+        'Asynchronous work is not allowed inside an accounting mutation.',
+        500,
+      );
       insert(db, 'idempotency_keys', {
         ...scope(req.actor),
         user_id: req.actor.id,

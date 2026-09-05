@@ -51,6 +51,7 @@ export function ProductForm({
     suppliers = useQuery(auth.can('suppliers.read') ? '/suppliers' : null);
   const [tab, setTab] = useState('details');
   const history = useQuery(product && auth.can('prices.write') ? `/products/${product.id}/history` : null);
+  const [extraBarcodes, setExtraBarcodes] = useState((product?.barcodes ?? []).slice(1).join('\n'));
   const [form, setForm] = useState({
     name: product?.name ?? '',
     brand: product?.brand ?? '',
@@ -143,7 +144,16 @@ export function ProductForm({
               async () => {
                 await api(product ? `/products/${product.id}` : '/products', {
                   method: product ? 'PATCH' : 'POST',
-                  body: form,
+                  body: {
+                    ...form,
+                    barcodes: [
+                      ...(form.barcode ? [form.barcode] : []),
+                      ...extraBarcodes
+                        .split(/\r?\n/)
+                        .map((s) => s.trim())
+                        .filter(Boolean),
+                    ],
+                  },
                 });
                 onSaved();
               },
@@ -220,6 +230,18 @@ export function ProductForm({
                   value={form.barcode}
                   onChange={(e) => set('barcode', e.target.value)}
                   placeholder="Not assigned"
+                />
+              </Field>
+              <Field
+                label="Additional scanned codes"
+                hint="One owner-verified barcode per line. Never invent a code."
+                className="span-2"
+              >
+                <textarea
+                  disabled={!editable}
+                  value={extraBarcodes}
+                  onChange={(e) => setExtraBarcodes(e.target.value)}
+                  rows={2}
                 />
               </Field>
               <Field label="Bottle / package size" hint="Use only a verified size, e.g. 750ml.">
@@ -341,6 +363,17 @@ export function ProductForm({
               </a>{' '}
               · Always confirm the physical package.
             </p>
+          )}
+          {product && (
+            <Notice>
+              Package:{' '}
+              {product.size ? 'recorded; confirm the physical unit' : 'unverified — required before sale'}.
+              Barcode: {product.barcode ? 'owner-recorded' : 'unverified / not supplied'}. Supplier:{' '}
+              {product.supplier ? 'owner-assigned' : 'not assigned'}.{' '}
+              {product.source_url
+                ? 'A source listing is not proof of current stock, price or physical package.'
+                : 'This is owner-entered master data.'}
+            </Notice>
           )}
           <Notice>
             <strong>Prices and stock are controlled separately.</strong> Use the price sheet for manual

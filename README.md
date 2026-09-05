@@ -4,6 +4,10 @@ A working, production-oriented retail POS and business-management application fo
 
 **This is not a visual-only prototype.** The cashier, catalogue, inventory, purchases, expenses, reconciliation, approval, reporting, staff and audit screens use authenticated APIs and persisted records. A separate, permanently marked preview workspace is available for evaluation.
 
+## Second-pass audit
+
+The existing architecture was audited and extended, not rebuilt. See the [second-pass audit/final status](docs/SECOND_PASS_AUDIT.md), [181-row requirement matrix](docs/REQUIREMENTS_MATRIX.md) and [execution evidence](docs/SECOND_PASS_VERIFICATION.json). The updated suite contains **86 automated tests and eight real-browser scenarios**. External fiscal, provider, hardware and host acceptance gates remain open; this is **not an unconditional production go-live declaration**.
+
 ## Start here
 
 | You want to…                                   | Go to…                                                                               |
@@ -46,10 +50,10 @@ The browser suite needs Chromium’s system libraries and `openssl` for local, e
 ## Operational capabilities
 
 - Fast SKU/barcode/name/brand search, quantity controls, quotes, authorised discounts, cash with change, M-Pesa/card/bank references and split tenders.
-- Completed-sale receipts as print-ready PDFs. Durable checkout keys, response-loss recovery and race-safe cancellation of **unposted** checkout attempts.
+- Snapshot-based receipts as 58 mm, 80 mm or A4 print-ready PDFs. Durable keys, response-loss recovery and race-safe cancellation of **unposted** financial submissions, including expenses, receiving and approvals.
 - Editable catalogue metadata and nullable, versioned, manually maintained buying/retail/wholesale/promo prices; spreadsheet-like bulk pricing and staged CSV/TSV import.
 - Opening stock, supplier receiving, moving weighted-average costing, counts, wastage/damage and a before/after movement ledger.
-- Supplier credit and settlements; expenses with private supporting documents; register sessions and reviewed daily closing.
+- Supplier credit and actual-reference settlements; independently reviewed receiving replacements; expenses with private evidence; optional manually confirmed recoverable input-VAT amounts; register sessions and reviewed daily closing.
 - Independent approval, rejection or clarification. Posted originals stay intact; corrections append linked reversals/adjustments and review events.
 - Date-filtered dashboard and financial/operational analytics, plus **10 CSV/PDF reports**: sales, profit, inventory, expenses, purchases, staff, approvals, audit, payments and journal.
 - Five server-enforced roles, temporary-password rotation, private uploads, immutable price/audit histories and ledger-integrity checks.

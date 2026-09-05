@@ -326,22 +326,28 @@ export default function Staff() {
             <thead>
               <tr>
                 <th>Staff</th>
+                <th>Revenue ex-tax</th>
                 <th>Average sale</th>
                 <th>Discounts issued</th>
                 <th>Correction requests</th>
                 <th>Expenses entered</th>
-                <th>Stock entries</th>
+                <th>Stock posted</th>
+                <th>Stock requests / receipts entered</th>
               </tr>
             </thead>
             <tbody>
               {performance.data?.staff.map((p: Row) => (
                 <tr key={p.id}>
                   <td>{p.name}</td>
+                  <td>{money(p.revenue_cents)}</td>
                   <td>{money(p.average_cents)}</td>
                   <td>{money(p.discounts_cents)}</td>
                   <td>{p.correction_requests}</td>
                   <td>{money(p.expenses_cents)}</td>
                   <td>{p.stock_entries}</td>
+                  <td>
+                    {p.stock_requests} requests · {p.purchase_entries} receipts
+                  </td>
                 </tr>
               ))}
             </tbody>

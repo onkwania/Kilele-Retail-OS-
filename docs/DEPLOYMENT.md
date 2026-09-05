@@ -8,7 +8,7 @@ Do not use ephemeral/serverless storage, NFS/network shares for the SQLite file,
 
 ## Clean operational bootstrap
 
-**Never convert the preview database.** Immutable environment markers (and legacy preview-email detection) refuse preview-to-operational promotion and operational-to-preview authentication.
+**Never convert the preview database.** Immutable environment markers and preserved preview-login audit evidence refuse preview-to-operational promotion and operational-to-preview authentication. User-editable emails never grant preview access or override explicit operational provenance. Ambiguous unmarked legacy databases fail closed.
 
 ```bash
 npm ci
@@ -85,7 +85,7 @@ docker compose --env-file .env -f deploy/compose.yaml exec -T app \
   node dist/server/backup.js /app/data/backups/your-new-snapshot.sqlite
 ```
 
-The command refuses existing destinations, restricts file permissions, and emits a matching `.manifest.json` containing SHA-256 and the audit-event count. Both files are required for restore. Preserve them together; encrypt and copy them to separately controlled off-site storage. A checksum detects accidental change, not an attacker who controls both database and manifest. Anchor backup hashes in a separately protected log/object store for stronger evidence.
+The command uses private unique staging, bounded-memory hashing, fsync and atomic no-clobber publication. It refuses existing destinations, restricts file permissions, and emits a matching `.manifest.json` containing SHA-256 and the audit-event count. Both files are required for restore. Preserve them together; encrypt and copy them to separately controlled off-site storage. A checksum detects accidental change, not an attacker who controls both database and manifest. Anchor backup hashes in a separately protected log/object store for stronger evidence.
 
 `deploy/backup.sh` is a scheduler-friendly wrapper. Example cron policy, **to be configured by your operator**, not installed automatically:
 
@@ -120,7 +120,7 @@ Restored environment markers are preserved. A restored preview remains a preview
 
 - [ ] Back up and perform a successful restore drill before each release.
 - [ ] Run unit/API tests, typecheck, lint, production build, browser acceptance and dependency audit on the release.
-- [ ] Stage the new release against a backup copy. Schema changes are applied by startup; do not run an older release against a newer schema without a verified rollback plan.
+- [ ] Stage the new release against a backup copy. Schema versions 2/3 are applied transactionally at startup, including restored guards; every pre-existing field is copied unchanged. Active register names differing only by case must be reconciled/closed before upgrade. A failure rolls the whole schema upgrade back; do not run an older release against a newer schema without a verified rollback plan.
 - [ ] Deploy exactly one process, with persistent storage and a tested shutdown/restart procedure.
 - [ ] Verify public HTTPS/origin, private backend, cookie security, actual client IP, time synchronisation and Africa/Nairobi reporting boundaries.
 - [ ] Create distinct authorised staff and independent reviewers; remove unused access.
@@ -131,3 +131,9 @@ Restored environment markers are preserved. A restored preview remains a preview
 - [ ] Obtain business/accountant approval and any required independent security review. No formal penetration test has been performed here.
 
 **Operational limitations:** no offline sale posting, payment initiation, automatic provider reconciliation, eTIMS integration, multi-instance HA or autonomous AI financial writes. All payment/refund entries require manual confirmation outside this application.
+
+## Second-pass release gates
+
+Read [SECOND_PASS_AUDIT.md](SECOND_PASS_AUDIT.md) and the [requirement matrix](REQUIREMENTS_MATRIX.md) before rollout. The supplied Docker/Caddy configuration is still a reviewed template, not a witnessed host deployment. This sandbox’s Node 20 test execution does not remove the requirement to verify on supported Node 22/24 and the actual filesystem, TLS proxy, client devices and off-site recovery service.
+
+Input-VAT amounts are explicit operator/accountant claims, not KRA verification. eTIMS onboarding/integration (or a separately validated compliant fiscal workflow), tax classification/deductibility and provider transaction acceptance remain outside the automated application tests. No credentials or fiscal acknowledgements have been invented.

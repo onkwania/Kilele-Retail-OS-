@@ -41,12 +41,14 @@ function PurchaseDetail({
   onCorrection,
   onUpdated,
   onPaymentCorrection,
+  onReplacement,
 }: {
   id: string;
   onClose: () => void;
   onCorrection: () => void;
   onUpdated: () => void;
   onPaymentCorrection: (id: string) => void;
+  onReplacement: (record: Row) => void;
 }) {
   const q = useQuery(`/purchases/${id}`),
     auth = useAuth(),
@@ -92,9 +94,20 @@ function PurchaseDetail({
           </div>
           <div>
             <label>RECEIVING STATUS</label>
-            <Status status={d.reversal ? 'reversed' : d.receipt ? 'posted' : 'pending'} />
+            <Status
+              status={
+                d.reversal ? 'reversed' : d.receipt ? 'posted' : (d.receiving_request?.status ?? 'pending')
+              }
+            />
           </div>
         </div>
+        {d.purchase.input_tax_cents > 0 && (
+          <Notice>
+            Inventory valuation cost: {money(d.purchase.total_cents - d.purchase.input_tax_cents, true)} ·
+            Recoverable input VAT recorded: {money(d.purchase.input_tax_cents, true)}. Deductibility requires
+            accountant verification.
+          </Notice>
+        )}
         <div className="table-wrap">
           <table className="data-table">
             <thead>
@@ -231,7 +244,19 @@ function PurchaseDetail({
           </form>
         )}
         {a.error && <p className="form-error">{a.error}</p>}
+        {d.replacements?.length > 0 && (
+          <Notice>
+            Linked replacement: {d.replacements.map((p: Row) => p.ref).join(', ')}. The original stays
+            preserved.
+          </Notice>
+        )}
         <div className="form-footer">
+          {!d.replacements?.length && (d.reversal || d.receiving_request?.status === 'rejected') && (
+            <Button variant="secondary" onClick={() => onReplacement(d)}>
+              <RotateCcw size={14} />
+              Create linked replacement
+            </Button>
+          )}
           {d.receipt && !d.reversal && (
             <Button variant="secondary" onClick={onCorrection}>
               <RotateCcw size={14} />
@@ -258,6 +283,7 @@ function PurchaseDetail({
   );
 }
 export default function Purchases() {
+  const [replacement, setReplacement] = useState<{ purchase: Row; items: Row[] } | undefined>();
   const auth = useAuth(),
     [params] = useSearchParams();
   const q = useQuery('/purchases'),
@@ -518,9 +544,14 @@ export default function Purchases() {
       </Panel>
       {form && (
         <PurchaseForm
-          onClose={() => setForm(false)}
+          replacement={replacement}
+          onClose={() => {
+            setForm(false);
+            setReplacement(undefined);
+          }}
           onSaved={() => {
             setForm(false);
+            setReplacement(undefined);
             q.refresh();
           }}
           onNewSupplier={() => {
@@ -549,7 +580,13 @@ export default function Purchases() {
       )}
       {selected && (
         <PurchaseDetail
+          key={selected}
           id={selected}
+          onReplacement={(record) => {
+            setSelected(null);
+            setReplacement({ purchase: record.purchase, items: record.items });
+            setForm(true);
+          }}
           onClose={() => setSelected(null)}
           onUpdated={q.refresh}
           onCorrection={() => {

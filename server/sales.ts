@@ -51,6 +51,7 @@ const saleSchema = quoteSchema
     expected_total: moneyInput,
     customer_id: z.string().nullable().optional(),
     notes: z.string().max(1000).default(''),
+    age_confirmed: z.boolean().default(false),
     payments: z
       .array(
         z
@@ -107,6 +108,7 @@ export function quoteSale(db: DB, a: Actor, input: z.infer<typeof quoteSchema>) 
       product_name: p.name,
       sku: p.sku,
       size: p.size,
+      unit: p.unit,
       quantity: item.quantity,
       unit_price_cents: unitPrice,
       unit_cost_cents: roundRatio(stock.value_cents, 1, stock.quantity),
@@ -158,6 +160,10 @@ export function createSale(db: DB, a: Actor, input: unknown) {
   if (b.customer_id) scoped(db, 'customers', b.customer_id, a, false);
   const q = quoteSale(db, a, { items: b.items, discount: b.discount, discount_reason: b.discount_reason });
   requireThat(
+    !q.items.some((i) => ['Spirits', 'Wines', 'Beer & Cider'].includes(i.category_name)) || b.age_confirmed,
+    'Confirm the adult age check before selling alcohol.',
+  );
+  requireThat(
     cents(b.expected_total) === q.total_cents,
     'The total has changed. Review the updated quote.',
     409,
@@ -194,6 +200,18 @@ export function createSale(db: DB, a: Actor, input: unknown) {
   const saleId = id('sale_'),
     saleRef = ref('SL'),
     timestamp = now();
+  const business = one(
+    db,
+    'SELECT name,address,phone,tax_pin,receipt_footer,currency,timezone FROM businesses WHERE id=?',
+    a.business_id,
+  )!;
+  const branch = one(
+    db,
+    'SELECT name,location FROM branches WHERE id=? AND business_id=?',
+    a.branch_id,
+    a.business_id,
+  )!;
+  const receiptSnapshot = { business, branch, register: session.register, staff_name: a.name };
   insert(db, 'sales', {
     id: saleId,
     ref: saleRef,
@@ -208,6 +226,8 @@ export function createSale(db: DB, a: Actor, input: unknown) {
     cogs_cents: q.cogs_cents,
     discount_reason: q.discount_reason,
     notes: b.notes,
+    receipt_snapshot_json: JSON.stringify(receiptSnapshot),
+    age_confirmed: b.age_confirmed ? 1 : 0,
     created_at: timestamp,
   });
   for (const line of q.items) {
@@ -289,67 +309,106 @@ export function saleDetail(
   }
   return { sale: { ...sale, staff_name: staff }, items, payments, reversals };
 }
-export function renderReceipt(res: Response, business: Row, details: ReturnType<typeof saleDetail>) {
+export function renderReceipt(
+  res: Response,
+  currentBusiness: Row,
+  details: ReturnType<typeof saleDetail>,
+  layout: '80mm' | '58mm' | 'a4' = '80mm',
+  currentBranch: Row = {},
+) {
   const { sale, items, payments, reversals } = details;
+  const snapshot = sale.receipt_snapshot_json ? JSON.parse(sale.receipt_snapshot_json) : null;
+  const business = snapshot?.business ?? currentBusiness,
+    branch = snapshot?.branch ?? currentBranch;
+  const width = layout === 'a4' ? 595.28 : layout === '58mm' ? 164.41 : 226.77,
+    margin = layout === 'a4' ? 36 : 14;
+  const font = layout === '58mm' ? 8 : 9;
+  type Block = { text: string; size?: number; bold?: boolean; center?: boolean; gap?: number };
+  const blocks: Block[] = [
+    { text: business.name, size: layout === '58mm' ? 14 : 18, bold: true, center: true, gap: 5 },
+    { text: business.address || 'Business address not configured', center: true },
+    ...(business.phone ? [{ text: business.phone, center: true }] : []),
+    {
+      text: `Branch: ${branch.name || 'Not recorded'}${branch.location ? ' · ' + branch.location : ''}`,
+      center: true,
+    },
+    { text: `KRA PIN: ${business.tax_pin || 'Not configured'}`, center: true, gap: 9 },
+    { text: 'INTERNAL SALES RECEIPT', bold: true, center: true },
+    { text: sale.ref, bold: true, center: true, gap: 7 },
+    { text: new Date(sale.created_at).toLocaleString('en-KE', { timeZone: 'Africa/Nairobi' }) + ' EAT' },
+    { text: `Register: ${snapshot?.register ?? 'Not recorded'}` },
+    { text: `Served by: ${snapshot?.staff_name ?? sale.staff_name}`, gap: 8 },
+    ...(!snapshot
+      ? [
+          {
+            text: 'Historical merchant identity was not captured. Current profile is shown; original sale amounts are preserved.',
+            size: 7,
+            gap: 7,
+          },
+        ]
+      : []),
+  ];
+  for (const line of items) {
+    blocks.push({ text: `${line.product_name} · ${line.size}`, bold: true });
+    blocks.push({
+      text: `${line.quantity} ${line.unit || 'unit'}${line.quantity === 1 ? '' : 's'} at KES ${amount(line.unit_price_cents)}${line.tax_mode === 'exclusive' ? ' (before tax)' : ''}`,
+    });
+    if (line.discount_cents) blocks.push({ text: `Line discount: KES ${amount(line.discount_cents)}` });
+    blocks.push({
+      text: `Line total: KES ${amount(line.total_cents)}${line.tax_cents ? ' · Tax KES ' + amount(line.tax_cents) : ''}`,
+      gap: 6,
+    });
+  }
+  blocks.push({ text: `Subtotal: KES ${amount(sale.subtotal_cents)}`, gap: 2 });
+  if (sale.discount_cents) blocks.push({ text: `Discount: KES ${amount(sale.discount_cents)}` });
+  blocks.push(
+    { text: `Tax included: KES ${amount(sale.tax_cents)}` },
+    { text: `TOTAL KES ${amount(sale.total_cents)}`, bold: true, size: 12, gap: 8 },
+  );
+  for (const payment of payments)
+    blocks.push({
+      text: `${payment.reversal_id ? 'Refund · ' : ''}${payment.method}: KES ${amount(payment.amount_cents)}${payment.reference ? ' · ' + payment.reference : ''}${payment.change_cents ? ' · Change KES ' + amount(payment.change_cents) : ''}`,
+      gap: 3,
+    });
+  if (reversals.length)
+    blocks.push({ text: `Linked return(s): ${reversals.map((r) => r.ref).join(', ')}`, gap: 5 });
+  if (sale.notes) blocks.push({ text: sale.notes, size: 7, gap: 4 });
+  blocks.push(
+    { text: business.receipt_footer, center: true, gap: 7 },
+    {
+      text: 'This is an internal sales receipt, not an eTIMS fiscal invoice. Alcohol sales require the applicable adult-age checks.',
+      size: 7,
+      center: true,
+    },
+  );
+  const measure = new PDFDocument({ autoFirstPage: false });
+  const height = blocks.reduce(
+    (sum, b) =>
+      sum +
+      measure
+        .font(b.bold ? 'Helvetica-Bold' : 'Helvetica')
+        .fontSize(b.size ?? font)
+        .heightOfString(b.text, { width: width - margin * 2 }) +
+      (b.gap ?? 2),
+    margin * 2 + 12,
+  );
+  measure.end();
+  measure.resume();
   const doc = new PDFDocument({
-    size: [260, Math.max(480, 360 + items.length * 43 + payments.length * 34)],
-    margin: 20,
+    size: layout === 'a4' ? 'A4' : [width, Math.min(14000, Math.max(240, Math.ceil(height)))],
+    margin,
   });
   res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', `inline; filename="receipt-${sale.ref}.pdf"`);
+  res.setHeader('Content-Disposition', `inline; filename="receipt-${sale.ref}-${layout}.pdf"`);
   doc.pipe(res);
-  doc.fillColor('#245745').fontSize(22).font('Helvetica-Bold').text(business.name, { align: 'center' });
-  doc
-    .fillColor('#555555')
-    .fontSize(9)
-    .font('Helvetica')
-    .text(business.address || 'Kenya', { align: 'center' });
-  if (business.phone) doc.text(business.phone, { align: 'center' });
-  doc
-    .moveDown()
-    .fillColor('#222222')
-    .fontSize(11)
-    .text('SALES RECEIPT', { align: 'center' })
-    .fontSize(9)
-    .text(sale.ref, { align: 'center' });
-  doc
-    .moveDown()
-    .text(new Date(sale.created_at).toLocaleString('en-KE', { timeZone: 'Africa/Nairobi' }))
-    .text(`Served by: ${sale.staff_name}`)
-    .moveDown();
-  for (const line of items) {
+  for (const block of blocks) {
     doc
-      .font('Helvetica-Bold')
-      .text(`${line.product_name} · ${line.size}`)
-      .font('Helvetica')
-      .text(`${line.quantity} × KES ${amount(line.unit_price_cents)}     KES ${amount(line.total_cents)}`)
-      .moveDown(0.4);
+      .font(block.bold ? 'Helvetica-Bold' : 'Helvetica')
+      .fontSize(block.size ?? font)
+      .fillColor('#263b2d')
+      .text(block.text, { align: block.center ? 'center' : 'left', width: width - margin * 2 });
+    doc.y += block.gap ?? 2;
   }
-  doc.moveDown().text(`Subtotal: KES ${amount(sale.subtotal_cents)}`);
-  if (sale.discount_cents) doc.text(`Discount: KES ${amount(sale.discount_cents)}`);
-  doc
-    .text(`Tax included: KES ${amount(sale.tax_cents)}`)
-    .font('Helvetica-Bold')
-    .fontSize(14)
-    .text(`TOTAL  KES ${amount(sale.total_cents)}`)
-    .font('Helvetica')
-    .fontSize(9)
-    .moveDown();
-  for (const p of payments)
-    doc.text(
-      `${p.reversal_id ? 'Refund · ' : ''}${p.method}: KES ${amount(p.amount_cents)}${p.reference ? ' · ' + p.reference : ''}${p.change_cents ? ' · Change KES ' + amount(p.change_cents) : ''}`,
-    );
-  if (reversals.length) doc.moveDown().text(`Linked return(s): ${reversals.map((r) => r.ref).join(', ')}`);
-  doc
-    .moveDown()
-    .text(business.receipt_footer, { align: 'center' })
-    .moveDown()
-    .fontSize(7)
-    .fillColor('#666666')
-    .text(
-      'This is an internal sales receipt, not an eTIMS fiscal invoice. Alcohol sales are restricted to adults aged 18 and over.',
-      { align: 'center' },
-    );
   doc.end();
 }
 export function installSales(app: Express, db: DB) {
@@ -372,13 +431,21 @@ export function installSales(app: Express, db: DB) {
     const rows = all(
       db,
       `SELECT s.*,u.name staff_name,(SELECT GROUP_CONCAT(DISTINCT method) FROM payments WHERE sale_id=s.id AND reversal_id IS NULL) payment_methods,
-      (SELECT COALESCE(SUM(total_cents),0) FROM sale_reversals WHERE sale_id=s.id) refunded_cents,(SELECT COUNT(*) FROM sale_items WHERE sale_id=s.id) item_count
+      (SELECT COALESCE(SUM(total_cents),0) FROM sale_reversals WHERE sale_id=s.id) refunded_cents,(SELECT COUNT(*) FROM sale_items WHERE sale_id=s.id) item_count,(SELECT SUM(quantity) FROM sale_items WHERE sale_id=s.id) sold_quantity,(SELECT COALESCE(SUM(ri.quantity),0) FROM sale_return_items ri JOIN sale_items si ON si.id=ri.sale_item_id WHERE si.sale_id=s.id) returned_quantity
       FROM sales s JOIN users u ON u.id=s.user_id WHERE s.business_id=? AND s.branch_id=? ${a.role_id === 'cashier' ? 'AND s.user_id=?' : ''} ORDER BY s.created_at DESC LIMIT 2000`,
       a.business_id,
       a.branch_id,
       ...(a.role_id === 'cashier' ? [a.id] : []),
     );
-    if (a.role_id === 'cashier') for (const row of rows) delete row.cogs_cents;
+    for (const row of rows) {
+      row.return_status =
+        row.returned_quantity >= row.sold_quantity
+          ? 'fully_returned'
+          : row.returned_quantity > 0
+            ? 'part_returned'
+            : 'completed';
+      if (a.role_id === 'cashier') delete row.cogs_cents;
+    }
     const from = new Date(`${kenyaDate()}T00:00:00+03:00`).toISOString(),
       to = new Date(Date.parse(from) + 86400000).toISOString();
     const today = one(
@@ -405,9 +472,21 @@ export function installSales(app: Express, db: DB) {
     res.json(saleDetail(db, req.actor, String(req.params.id))),
   );
   app.get('/api/sales/:id/receipt', protect('sales.read'), (req, res) => {
+    const layout = z.enum(['80mm', '58mm', 'a4']).parse(req.query.layout ?? '80mm');
     const details = saleDetail(db, req.actor, String(req.params.id));
     audit(db, req.actor, 'receipt.downloaded', 'sales', details.sale.id, null, null, 'Sales receipt PDF');
-    renderReceipt(res, one(db, 'SELECT * FROM businesses WHERE id=?', req.actor.business_id)!, details);
+    renderReceipt(
+      res,
+      one(db, 'SELECT * FROM businesses WHERE id=?', req.actor.business_id)!,
+      details,
+      layout,
+      one(
+        db,
+        'SELECT name,location FROM branches WHERE id=? AND business_id=?',
+        req.actor.branch_id,
+        req.actor.business_id,
+      )!,
+    );
   });
   app.post('/api/sessions', protect('sessions.own'), (req, res) => {
     const b = z

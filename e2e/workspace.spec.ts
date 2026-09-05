@@ -526,3 +526,276 @@ test('production-mode HTTPS requires real login, disables preview and issues a s
   ).toBe(true);
   await context.close();
 });
+
+test('second-pass non-POS recovery preserves a committed expense and cancels a never-posted intent', async ({
+  page,
+}) => {
+  await ready(page, '/expenses', 'Business expenses');
+  if (!(await json(page, '/sessions')).current)
+    await openRegister(page, 'Second-pass recovery register', '1000');
+  await ready(page, '/expenses', 'Business expenses');
+  const fill = async (description: string, amount: string) => {
+    await page.getByRole('button', { name: 'Record expense', exact: true }).click();
+    await dialog(page)
+      .getByLabel(/^Expense category/)
+      .selectOption('Transport');
+    await dialog(page).getByLabel('Expense amount', { exact: true }).fill(amount);
+    await dialog(page)
+      .getByLabel(/^Description/)
+      .fill(description);
+  };
+  await fill('Second-pass response-loss expense', '50');
+  await page.route('**/api/expenses', async (route) => {
+    if (route.request().method() === 'POST') {
+      const cookie = (await page.context().cookies()).find((c) => c.name === 'kilele_session')!;
+      const response = await fetch(route.request().url(), {
+        method: 'POST',
+        headers: { ...(await route.request().allHeaders()), cookie: `kilele_session=${cookie.value}` },
+        body: route.request().postData(),
+      });
+      expect(response.status).toBe(201);
+      await route.abort('failed');
+    } else await route.continue();
+  });
+  await dialog(page).getByRole('button', { name: 'Post expense' }).click();
+  await expect(page.getByText(/Connection lost before final confirmation/).first()).toBeVisible();
+  await page.unroute('**/api/expenses');
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Resolve saved entry' })).toBeVisible();
+  await fill('Must not become a duplicate expense', '51');
+  await dialog(page).getByRole('button', { name: 'Post expense' }).click();
+  await expect(page.getByText(/Resolve the saved financial submission/).first()).toBeVisible();
+  await dialog(page).getByRole('button', { name: 'Close dialog' }).click();
+  await page.getByRole('button', { name: 'Resolve saved entry' }).click();
+  await dialog(page).getByRole('button', { name: 'Confirm saved entry' }).click();
+  await expect(dialog(page)).toHaveCount(0);
+  let expenses = (await json(page, '/expenses')).expenses;
+  expect(expenses.filter((e: any) => e.description === 'Second-pass response-loss expense')).toHaveLength(1);
+  expect(expenses.some((e: any) => e.description === 'Must not become a duplicate expense')).toBe(false);
+  await fill('Unposted expense to cancel', '5');
+  await page.route('**/api/expenses', (route) =>
+    route.request().method() === 'POST' ? route.abort('failed') : route.continue(),
+  );
+  await dialog(page).getByRole('button', { name: 'Post expense' }).click();
+  await expect(page.getByText(/Connection lost before final confirmation/).first()).toBeVisible();
+  await page.unroute('**/api/expenses');
+  const pending = await page.evaluate(() => {
+    for (let i = 0; i < sessionStorage.length; i++) {
+      const value = sessionStorage.getItem(sessionStorage.key(i)!)!;
+      try {
+        const record = JSON.parse(value);
+        if (record.path === '/expenses' && record.body) return record;
+      } catch {
+        /* Other app storage. */
+      }
+    }
+  });
+  await page.reload();
+  await page.getByRole('button', { name: 'Resolve saved entry' }).click();
+  await dialog(page).getByText('Or cancel this unposted submission safely', { exact: true }).click();
+  await dialog(page)
+    .getByLabel(/^Reason for cancelling/)
+    .fill('Physical expense not incurred; cancel the unposted intent');
+  await dialog(page).getByRole('button', { name: 'Cancel without posting' }).click();
+  await expect(dialog(page)).toHaveCount(0);
+  const csrf = (await json(page, '/auth/me')).csrf;
+  const late = await page.evaluate(
+    async ({ pending, csrf }) => {
+      const r = await fetch('/api/expenses', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf, 'Idempotency-Key': pending.key },
+        body: JSON.stringify(pending.body),
+      });
+      return { status: r.status, body: await r.json() };
+    },
+    { pending, csrf },
+  );
+  expect(late.body.code).toBe('SUBMISSION_CANCELLED');
+  expenses = (await json(page, '/expenses')).expenses;
+  expect(expenses.some((e: any) => e.description === 'Unposted expense to cancel')).toBe(false);
+  expect((await json(page, '/integrity')).ok).toBe(true);
+});
+
+test('second-pass accountant replaces rejected receiving through independent approval without changing the invoice or original', async ({
+  page,
+  browser,
+}) => {
+  await ready(page, '/staff', 'Staff & access');
+  await page.getByRole('button', { name: 'Add team member' }).click();
+  await dialog(page)
+    .getByLabel(/^Full name/)
+    .fill('Second-pass Accountant');
+  await dialog(page)
+    .getByLabel(/^Email address/)
+    .fill('qa.operator-second@example.test');
+  await dialog(page).getByLabel(/^Role/).selectOption('accountant');
+  await dialog(page)
+    .getByLabel(/^Temporary password/)
+    .fill('qa-operator-temporary-long');
+  await dialog(page)
+    .getByLabel(/^Reason for access/)
+    .fill('Verify full accountant receiving and correction workflow');
+  await dialog(page).getByRole('button', { name: 'Create staff account' }).click();
+  await expect(dialog(page)).toHaveCount(0);
+  const context = await browser.newContext({ baseURL: 'http://127.0.0.1:4173' }),
+    operator = await context.newPage();
+  await operator.addInitScript(() => sessionStorage.setItem('kilele-signed-out', '1'));
+  await operator.goto('/');
+  await operator.getByLabel(/^Email address/).fill('qa.operator-second@example.test');
+  await operator.getByLabel(/^Password/).fill('qa-operator-temporary-long');
+  await operator.getByRole('button', { name: /Sign in/ }).click();
+  await operator.getByLabel(/^Current \/ temporary password/).fill('qa-operator-temporary-long');
+  await operator.getByLabel(/^New password/).fill('qa-operator-rotated-long');
+  await operator.getByLabel(/^Confirm new password/).fill('qa-operator-rotated-long');
+  await operator.getByRole('button', { name: 'Update password' }).click();
+  await expect(operator.getByRole('heading', { name: 'Point of sale', exact: true })).toBeVisible();
+  const product = (await json(operator, '/products')).products.find(
+      (p: any) => p.name === 'Coca-Cola Original' && p.size === '500ml',
+    ),
+    before = product.stock,
+    supplier = (await json(operator, '/suppliers')).suppliers[0];
+  await ready(operator, '/purchases', 'Purchases & suppliers');
+  await operator.getByRole('button', { name: 'Receive stock', exact: true }).first().click();
+  await dialog(operator)
+    .getByLabel(/^Supplier\s*\*/)
+    .selectOption(supplier.id);
+  await dialog(operator)
+    .getByLabel(/^Supplier invoice/)
+    .fill('UI-CORRECTABLE-INVOICE');
+  await dialog(operator).getByLabel('Purchase product', { exact: true }).selectOption(product.id);
+  await dialog(operator).getByLabel('Purchase quantity', { exact: true }).fill('4');
+  await dialog(operator).getByLabel('Purchase unit cost', { exact: true }).fill('100');
+  await dialog(operator)
+    .getByLabel(/^Receiving reason/)
+    .fill('Second-pass wrong quantity submitted for checking');
+  await dialog(operator).getByRole('button', { name: 'Submit purchase for approval' }).click();
+  await expect(dialog(operator)).toHaveCount(0);
+  const original = (await json(operator, '/purchases')).purchases.find(
+    (p: any) => p.invoice_ref === 'UI-CORRECTABLE-INVOICE',
+  );
+  expect((await stock(operator, product.id)).stock).toBe(before);
+  let requests = (await json(page, '/approvals')).requests;
+  const originalRequest = requests.find((r: any) => r.entity_id === original.id);
+  await page.goto('/approvals?id=' + originalRequest.id);
+  await dialog(page)
+    .getByLabel(/^Review \/ decision reason/)
+    .fill('The delivery note records two units, not four');
+  await dialog(page).getByRole('button', { name: 'Reject', exact: true }).click();
+  await expect(dialog(page)).toHaveCount(0);
+  await operator.reload();
+  await operator.locator('tr').filter({ hasText: original.ref }).click();
+  await dialog(operator).getByRole('button', { name: 'Create linked replacement' }).click();
+  await dialog(operator).getByLabel('Purchase quantity', { exact: true }).fill('2');
+  await dialog(operator)
+    .getByLabel(/^Receiving reason/)
+    .fill('Correct original receiving quantity against the same invoice');
+  await dialog(operator)
+    .getByLabel(/^Explanation \/ what changed/)
+    .fill('Only two units were delivered; original capture was four');
+  await dialog(operator).getByRole('button', { name: 'Submit purchase for approval' }).click();
+  await expect(dialog(operator)).toHaveCount(0);
+  const replacement = (await json(operator, '/purchases')).purchases.find(
+    (p: any) => p.replaces_id === original.id,
+  );
+  expect(replacement.invoice_ref).toBe(original.invoice_ref);
+  expect(replacement.status).toBe('pending');
+  expect((await stock(operator, product.id)).stock).toBe(before);
+  requests = (await json(page, '/approvals')).requests;
+  const reviewed = requests.find((r: any) => r.entity_id === replacement.id);
+  await operator.goto('/approvals?id=' + reviewed.id);
+  await expect(dialog(operator).getByRole('button', { name: 'Approve & post', exact: true })).toHaveCount(0);
+  await page.goto('/approvals?id=' + reviewed.id);
+  await expect(
+    dialog(page).getByRole('heading', { name: 'Linked original purchase — preserved' }),
+  ).toBeVisible();
+  await dialog(page)
+    .getByLabel(/^Review \/ decision reason/)
+    .fill('Corrected quantity and unchanged supplier invoice independently checked');
+  await dialog(page).getByRole('button', { name: 'Approve & post', exact: true }).click();
+  await expect(dialog(page)).toHaveCount(0);
+  expect((await stock(page, product.id)).stock).toBe(before + 2);
+  expect((await json(page, '/purchases/' + original.id)).purchase.total_cents).toBe(40000);
+  expect((await json(page, '/integrity')).ok).toBe(true);
+  await context.close();
+});
+
+test('second-pass dashboard, barcode keyboard input, literal XSS text, electronic tenders and receipt formats', async ({
+  page,
+}, testInfo) => {
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await ready(page, '/', 'Business overview');
+  await expect(page.getByRole('heading', { name: 'Selected-period financials' })).toBeVisible();
+  for (const view of ['best_selling', 'top_products', 'highest_margin', 'slow_moving', 'declining'])
+    await page.getByLabel('Product performance view', { exact: true }).selectOption(view);
+  await page.getByRole('button', { name: /Last 7 days/ }).click();
+  await page.getByRole('button', { name: 'Yesterday', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Selected-period financials' })).toBeVisible();
+  await page.getByRole('button', { name: /Yesterday/ }).click();
+  await page.getByRole('button', { name: 'This month', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Selected-period financials' })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('dashboard-second-pass.png'), fullPage: true });
+  let product = (await json(page, '/products')).products.find(
+    (p: any) => p.name === 'Coca-Cola Original' && p.size === '500ml',
+  );
+  await ready(page, '/products', 'Product catalogue');
+  await page.getByPlaceholder('Search name, SKU or barcode…').fill(product.sku);
+  await page.getByRole('button', { name: `Edit ${product.name} ${product.size}`, exact: true }).click();
+  await dialog(page)
+    .getByLabel(/^Barcode/)
+    .fill('TEST-PHYSICAL-PRIMARY');
+  await dialog(page)
+    .getByLabel(/^Additional scanned codes/)
+    .fill('TEST-PHYSICAL-ALIAS');
+  await dialog(page)
+    .getByLabel(/^Reason for this change/)
+    .fill('Synthetic keyboard-wedge scanner alias acceptance');
+  await dialog(page).getByRole('button', { name: 'Save product', exact: true }).click();
+  await expect(dialog(page)).toHaveCount(0);
+  if (!(await json(page, '/sessions')).current)
+    await openRegister(page, 'Second-pass electronic register', '0');
+  await ready(page, '/pos', 'Point of sale');
+  for (const method of ['Card', 'Bank']) {
+    await scan(page, 'TEST-PHYSICAL-ALIAS');
+    await dialog(page).getByRole('button', { name: method, exact: true }).click();
+    await dialog(page)
+      .getByLabel(method === 'Card' ? 'Terminal / approval reference' : 'Bank transaction reference', {
+        exact: false,
+      })
+      .fill('SECOND-PASS-' + method.toUpperCase());
+    await dialog(page).getByLabel('I have counted the cash and/or verified all electronic payments.').check();
+    await dialog(page)
+      .getByRole('button', { name: /Complete sale/ })
+      .click();
+    await expect(dialog(page).getByRole('heading', { name: 'Sale completed', exact: true })).toBeVisible();
+    await dialog(page)
+      .getByLabel(/^Receipt paper/)
+      .selectOption(method === 'Card' ? '58mm' : 'a4');
+    const downloadEvent = page.waitForEvent('download');
+    await dialog(page).getByRole('button', { name: 'Download PDF' }).click();
+    const file = await downloadEvent;
+    await file.saveAs(testInfo.outputPath(method + '.pdf'));
+    const bytes = await readFile(testInfo.outputPath(method + '.pdf'));
+    expect(bytes.toString('latin1')).toMatch(
+      method === 'Card' ? /MediaBox \[0 0 164\.41 / : /MediaBox \[0 0 595\.28 841\.89\]/,
+    );
+    await dialog(page).getByRole('button', { name: 'Next customer' }).click();
+  }
+  await ready(page, '/products', 'Product catalogue');
+  await page.getByPlaceholder('Search name, SKU or barcode…').fill(product.sku);
+  await page.getByRole('button', { name: `Edit ${product.name} ${product.size}`, exact: true }).click();
+  const malicious = 'Literal <img src=x onerror="window.kileleInjected=1">';
+  await dialog(page)
+    .getByLabel(/^Product name/)
+    .fill(malicious);
+  await dialog(page)
+    .getByLabel(/^Reason for this change/)
+    .fill('Verify user text is never interpreted as HTML');
+  await dialog(page).getByRole('button', { name: 'Save product', exact: true }).click();
+  await expect(page.getByText(malicious, { exact: true }).first()).toBeVisible();
+  expect(await page.evaluate(() => Object.hasOwn(window, 'kileleInjected'))).toBe(false);
+  product = (await json(page, '/products')).products.find((p: any) => p.id === product.id);
+  expect(product.barcodes).toEqual(['TEST-PHYSICAL-PRIMARY', 'TEST-PHYSICAL-ALIAS']);
+  expect((await json(page, '/integrity')).ok).toBe(true);
+  expect(errors).toEqual([]);
+});

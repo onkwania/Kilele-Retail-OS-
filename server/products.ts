@@ -117,6 +117,7 @@ const productSchema = z
     subcategory: z.string().trim().max(100).default(''),
     sku: z.string().trim().max(80).default(''),
     barcode: z.string().trim().max(100).default(''),
+    barcodes: z.array(z.string().trim().min(1).max(100)).max(20).optional(),
     size: z.string().trim().max(80).default(''),
     unit: z.enum(['bottle', 'can', 'pack', 'case', 'unit', 'bag', 'kg']).default('bottle'),
     supplier_id: z.string().nullable().default(null),
@@ -134,7 +135,8 @@ const productSchema = z
   })
   .strict();
 export const productSelect = `SELECT p.*,CASE WHEN p.cost_cents IS NOT NULL THEN 1 ELSE 0 END cost_configured,b.name brand,c.name category,c.color category_color,COALESCE(i.quantity,0) stock,COALESCE(i.value_cents,0) stock_value_cents,
- s.name supplier,(SELECT barcode FROM product_barcodes WHERE product_id=p.id LIMIT 1) barcode,
+ s.name supplier,(SELECT barcode FROM product_barcodes WHERE product_id=p.id ORDER BY rowid LIMIT 1) barcode,
+ (SELECT json_group_array(barcode) FROM (SELECT barcode FROM product_barcodes WHERE product_id=p.id ORDER BY rowid)) barcodes_json,
  (SELECT COALESCE(SUM(quantity),0) FROM inventory_movements WHERE product_id=p.id AND branch_id=i.branch_id AND kind='opening') opening_stock
  FROM products p JOIN brands b ON b.id=p.brand_id JOIN categories c ON c.id=p.category_id
  LEFT JOIN inventory i ON i.product_id=p.id AND i.business_id=p.business_id AND i.branch_id=? LEFT JOIN suppliers s ON s.id=p.supplier_id`;
@@ -145,6 +147,12 @@ export function productList(db: DB, a: Actor) {
     a.branch_id,
     a.business_id,
   );
+  for (const row of rows) {
+    row.barcodes = JSON.parse(row.barcodes_json ?? '[]');
+    delete row.barcodes_json;
+    row.package_status = row.size ? 'recorded_unconfirmed' : 'unverified';
+    row.source_status = row.source_url ? 'source_reference' : 'owner_entered';
+  }
   if (a.role_id === 'cashier')
     for (const row of rows) {
       delete row.cost_cents;
@@ -186,15 +194,42 @@ export function installProducts(app: Express, db: DB) {
     res.json(mutate(db, req, () => applyPrices(db, req.actor, body.rows, body.reason)));
   });
   function saveProduct(a: Actor, input: unknown, productId?: string) {
-    const b = productSchema.parse(input),
-      original = productId ? scoped(db, 'products', productId, a, false) : null;
+    const original = productId ? scoped(db, 'products', productId, a, false) : null;
+    const originalFields = original
+      ? {
+          name: original.name,
+          brand: one(db, 'SELECT name FROM brands WHERE id=?', original.brand_id)!.name,
+          category: one(db, 'SELECT name FROM categories WHERE id=?', original.category_id)!.name,
+          subcategory: original.subcategory,
+          sku: original.sku,
+          barcode:
+            one(
+              db,
+              'SELECT barcode FROM product_barcodes WHERE product_id=? ORDER BY rowid LIMIT 1',
+              original.id,
+            )?.barcode ?? '',
+          size: original.size,
+          unit: original.unit,
+          supplier_id: original.supplier_id,
+          min_stock: original.min_stock,
+          reorder_level: original.reorder_level,
+          active: !!original.active,
+          image: original.image,
+          notes: original.notes,
+        }
+      : {};
+    const b = productSchema.parse(
+      original && typeof input === 'object' && input && !Array.isArray(input)
+        ? { ...originalFields, ...input }
+        : input,
+    );
     if (original) requireThat(b.version === original.version, 'Product changed. Reload before saving.', 409);
     if (b.supplier_id) scoped(db, 'suppliers', b.supplier_id, a, false);
     if (b.image) {
       const doc = scoped(db, 'documents', b.image.split('/').pop()!, a);
       requireThat(
-        ['image/jpeg', 'image/png', 'image/webp'].includes(doc.mime),
-        'Product image must be a supported image.',
+        doc.purpose === 'product' && ['image/jpeg', 'image/png', 'image/webp'].includes(doc.mime),
+        'Use an image uploaded specifically for product display.',
       );
     }
     const lookup = (table: string, name: string) => {
@@ -233,14 +268,28 @@ export function installProducts(app: Express, db: DB) {
       insert(db, 'products', { id: rid, business_id: a.business_id, ...row, created_at: now() });
       insert(db, 'inventory', { business_id: a.business_id, branch_id: a.branch_id, product_id: rid });
     }
-    const oldBarcodes = all(db, 'SELECT barcode FROM product_barcodes WHERE product_id=?', rid);
+    const oldBarcodes = all(
+      db,
+      'SELECT barcode FROM product_barcodes WHERE product_id=? ORDER BY rowid',
+      rid,
+    );
+    const barcodes = b.barcodes ?? [
+      ...(b.barcode ? [b.barcode] : []),
+      ...oldBarcodes
+        .slice(1)
+        .map((r) => r.barcode)
+        .filter((code) => code !== b.barcode),
+    ];
+    requireThat(new Set(barcodes).size === barcodes.length, 'Duplicate barcode in this product.');
+    if (b.barcodes && b.barcode)
+      requireThat(barcodes[0] === b.barcode, 'The first barcode must match the primary barcode.');
     db.prepare('DELETE FROM product_barcodes WHERE product_id=? AND business_id=?').run(rid, a.business_id);
-    if (b.barcode)
+    for (const barcode of barcodes)
       insert(db, 'product_barcodes', {
         id: id(),
         business_id: a.business_id,
         product_id: rid,
-        barcode: b.barcode,
+        barcode,
       });
     audit(
       db,
@@ -249,7 +298,7 @@ export function installProducts(app: Express, db: DB) {
       'products',
       rid,
       original ? { ...original, barcodes: oldBarcodes } : null,
-      { ...row, barcode: b.barcode },
+      { ...row, barcodes },
       b.reason,
     );
     return { ok: true, id: rid };
@@ -273,11 +322,19 @@ export function installProducts(app: Express, db: DB) {
           )!.n
         : one(
             db,
-            "SELECT COUNT(*) n FROM approval_requests WHERE user_id=? AND status IN('pending','clarification')",
+            "SELECT COUNT(*) n FROM approval_requests WHERE user_id=? AND business_id=? AND branch_id=? AND status IN('pending','clarification')",
             a.id,
+            a.business_id,
+            a.branch_id,
           )!.n,
       session: can(a, 'sessions.own')
-        ? (one(db, 'SELECT * FROM cash_sessions WHERE user_id=? AND closed_at IS NULL', a.id) ?? null)
+        ? (one(
+            db,
+            'SELECT * FROM cash_sessions WHERE user_id=? AND business_id=? AND branch_id=? AND closed_at IS NULL',
+            a.id,
+            a.business_id,
+            a.branch_id,
+          ) ?? null)
         : null,
     });
   });

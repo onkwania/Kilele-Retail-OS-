@@ -3,7 +3,7 @@ import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { rateLimit } from 'express-rate-limit';
 import { z } from 'zod';
 import { type Actor, type DB, AppError, audit, now, one, sha, requireThat, demand } from './core.js';
-import { actorFor, hashPassword } from './db.js';
+import { actorFor, hashPassword, SCRYPT_OPTIONS } from './db.js';
 
 declare module 'express-serve-static-core' {
   interface Request {
@@ -14,9 +14,13 @@ declare module 'express-serve-static-core' {
 }
 const DUMMY_HASH = hashPassword('dummy-password-not-used');
 export function verifyPassword(password: string, stored: string) {
-  const [salt, key] = stored.split(':');
-  const computed = scryptSync(password, salt, 64, { N: 16384, r: 8, p: 1 });
-  return timingSafeEqual(Buffer.from(key, 'hex'), computed);
+  const modern = typeof stored === 'string' && /^scrypt-v2:[a-f0-9]{32}:[a-f0-9]{128}$/.test(stored);
+  const legacy = typeof stored === 'string' && /^[a-f0-9]{32}:[a-f0-9]{128}$/.test(stored);
+  const parts = (modern || legacy ? stored : DUMMY_HASH).split(':');
+  const salt = parts[parts.length - 2],
+    key = parts[parts.length - 1];
+  const computed = scryptSync(password, salt, 64, legacy ? { N: 16384, r: 8, p: 1 } : SCRYPT_OPTIONS);
+  return (modern || legacy) && timingSafeEqual(Buffer.from(key, 'hex'), computed);
 }
 export function protect(permission?: string) {
   return (req: Request, _res: Response, next: NextFunction) => {
@@ -44,6 +48,10 @@ export function installAuth(
     maxAge: 12 * 3600_000,
   };
   function newSession(req: Request, res: Response, userId: string) {
+    db.prepare('DELETE FROM auth_sessions WHERE expires_at<=?').run(now());
+    db.prepare('DELETE FROM login_attempts WHERE updated_at<?').run(
+      new Date(Date.now() - 30 * 86400000).toISOString(),
+    );
     if (req.sessionHash) db.prepare('DELETE FROM auth_sessions WHERE token_hash=?').run(req.sessionHash);
     const token = randomBytes(32).toString('hex'),
       csrf = randomBytes(32).toString('hex');
@@ -136,7 +144,11 @@ export function installAuth(
     );
     const user = one(db, 'SELECT * FROM users WHERE email=? COLLATE NOCASE AND active=1', email);
     if (!verifyPassword(body.password, user?.password_hash ?? DUMMY_HASH) || !user) {
-      const failures = (attempt?.failures ?? 0) + 1;
+      const expired =
+        attempt &&
+        (Date.parse(attempt.updated_at) + 15 * 60_000 <= Date.now() ||
+          (attempt.locked_until && attempt.locked_until <= now()));
+      const failures = (expired ? 0 : (attempt?.failures ?? 0)) + 1;
       db.prepare(
         'INSERT INTO login_attempts VALUES(?,?,?,?) ON CONFLICT(email) DO UPDATE SET failures=excluded.failures,locked_until=excluded.locked_until,updated_at=excluded.updated_at',
       ).run(email, failures, failures >= 5 ? new Date(Date.now() + 15 * 60_000).toISOString() : null, now());
@@ -152,6 +164,21 @@ export function installAuth(
           'Invalid credentials',
         );
       throw new AppError(401, 'Email or password is incorrect.');
+    }
+    if (!user.password_hash.startsWith('scrypt-v2:')) {
+      db.transaction(() => {
+        db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(hashPassword(body.password), user.id);
+        audit(
+          db,
+          { ...actorFor(db, user.id)!, ip: req.ip },
+          'auth.password_rehashed',
+          'users',
+          user.id,
+          null,
+          { scheme: 'scrypt-v2' },
+          'Upgrade legacy password derivation after successful authentication',
+        );
+      }).immediate();
     }
     db.prepare('DELETE FROM login_attempts WHERE email=?').run(email);
     const csrf = newSession(req, res, user.id);
@@ -191,7 +218,14 @@ export function installAuth(
     }
     res.clearCookie('kilele_session', { ...cookieOptions, maxAge: undefined }).json({ ok: true });
   });
-  app.post('/api/auth/password', (req, res) => {
+  const passwordLimit = rateLimit({
+    windowMs: 15 * 60_000,
+    limit: 10,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { error: 'Too many password-change attempts. Try again later.' },
+  });
+  app.post('/api/auth/password', passwordLimit, (req, res) => {
     requireThat(req.actor, 'Sign in first.', 401);
     const body = z
       .object({ current: z.string().max(200), password: z.string().min(12).max(200) })
@@ -200,23 +234,26 @@ export function installAuth(
     const user = one(db, 'SELECT * FROM users WHERE id=?', req.actor.id)!;
     requireThat(verifyPassword(body.current, user.password_hash), 'Current password is incorrect.', 400);
     requireThat(body.current !== body.password, 'Choose a different password.');
-    db.transaction(() => {
-      db.prepare('UPDATE users SET password_hash=?,must_change_password=0 WHERE id=?').run(
-        hashPassword(body.password),
-        user.id,
-      );
-      db.prepare('DELETE FROM auth_sessions WHERE user_id=?').run(user.id);
-      audit(
-        db,
-        req.actor,
-        'auth.password_changed',
-        'users',
-        user.id,
-        null,
-        { sessions_revoked: true },
-        'User password change',
-      );
-    }).immediate();
-    res.json({ csrf: newSession(req, res, user.id), user: actorFor(db, user.id) });
+    const csrf = db
+      .transaction(() => {
+        db.prepare('UPDATE users SET password_hash=?,must_change_password=0 WHERE id=?').run(
+          hashPassword(body.password),
+          user.id,
+        );
+        db.prepare('DELETE FROM auth_sessions WHERE user_id=?').run(user.id);
+        audit(
+          db,
+          req.actor,
+          'auth.password_changed',
+          'users',
+          user.id,
+          null,
+          { sessions_revoked: true },
+          'User password change',
+        );
+        return newSession(req, res, user.id);
+      })
+      .immediate();
+    res.json({ csrf, user: actorFor(db, user.id) });
   });
 }

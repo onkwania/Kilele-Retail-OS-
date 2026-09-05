@@ -4,7 +4,7 @@ The complete row-level source register is [catalogue-sources.csv](catalogue-sour
 
 ## What is supplied
 
-**140 source-linked listings** across Spirits, Wines, Beer & Cider, Soft Drinks, Water, Energy Drinks, Mixers, and Snacks & Accessories. A listing proves a referenced name/variant/package, not current supplier availability, a selling price or that the shop owns any stock.
+**140 source-linked listings** across Spirits, Wines, Beer & Cider, Soft Drinks, Water, Energy Drinks, Mixers, and Snacks & Accessories. A source listing is evidence to review a recorded candidate, not independent physical-package verification, current supplier availability, a selling price or proof that the shop owns stock.
 
 - Buying, retail, wholesale and promotional prices are intentionally null.
 - Tax is unconfigured, stock is zero, and no manufacturer barcodes are fabricated.
@@ -35,3 +35,9 @@ CATALOGUE_ACTOR_EMAIL=your-authorised-admin@example.co.ke node dist/server/catal
 ```
 
 The CLI requires an existing database and an active product administrator. It adds missing sourced variants, avoids existing identity/SKU collisions, records the authorising actor and leaves existing metadata, prices, stock and history unchanged. This is not a remote price feed.
+
+## Second-pass evidence review
+
+All 140 existing candidates and their 18 source URLs were reviewed without adding invented products, prices or barcodes. Retrieval succeeded for 16 URLs; the historical Oaks `/product-category/spirits/` URL returned 404 and the Tawala page could not be revalidated. A reachable listing is **not** proof that every displayed variant/size belongs together or that the physical pack is stocked locally. The [second-pass field register](CATALOGUE_SECOND_PASS.csv) therefore labels physical package assurance as unverified, preserves the recorded candidate value for review, and leaves barcode/price/supplier facts to the owner. It does not silently replace existing master data or claim manufacturer verification.
+
+The application now explicitly distinguishes source-reference/owner-entered metadata and unverified/unconfirmed package fields. Missing package size still blocks checkout; the Homezaza accessory is not assigned an invented dimension or pack quantity.

@@ -372,7 +372,7 @@ export function seedCatalogue(db: DB, a: Actor, includeNew = false) {
         a.business_id,
         null,
         { products_added: added, starter_catalogue_size: CATALOGUE.length, prices: null, stock: 0 },
-        'Verified starter catalogue; no prices, barcodes or stock fabricated',
+        'Source-linked starter catalogue; owner confirms physical packs. No prices, barcodes or stock supplied',
       );
   }).immediate();
 }

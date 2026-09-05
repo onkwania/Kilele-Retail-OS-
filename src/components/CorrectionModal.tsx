@@ -207,6 +207,7 @@ export function CorrectionModal({
       setReplacement({
         category: e.category,
         amount: numeric(e.amount_cents),
+        input_tax: numeric(e.input_tax_cents ?? 0),
         expense_date: e.expense_date,
         method: e.method,
         description: e.description,

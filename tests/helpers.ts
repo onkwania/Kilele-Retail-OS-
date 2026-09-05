@@ -69,6 +69,7 @@ export function addUser(db: DB, a: Actor, role: string, name = role) {
 }
 export const saleInput = (p: any, sessionId: string) => ({
   session_id: sessionId,
+  age_confirmed: true, // Explicit synthetic adult-check attestation; no real sale is made.
   items: [{ product_id: p.id, quantity: 2, version: p.version, price_type: 'retail' }],
   discount: '0',
   discount_reason: '',

@@ -36,6 +36,7 @@ export function SaleDetail({
   onClose: () => void;
   onCorrection: () => void;
 }) {
+  const [layout, setLayout] = useState('80mm');
   const q = useQuery(`/sales/${id}`),
     a = useAction();
   return (
@@ -155,6 +156,14 @@ export function SaleDetail({
                 ))}
               </section>
             )}
+            <label className="field">
+              <span>Receipt paper</span>
+              <select value={layout} onChange={(e) => setLayout(e.target.value)}>
+                <option value="80mm">80 mm receipt</option>
+                <option value="58mm">58 mm receipt</option>
+                <option value="a4">A4 document</option>
+              </select>
+            </label>
             <div className="form-footer">
               <Button variant="secondary" onClick={onCorrection}>
                 <RotateCcw size={14} />
@@ -164,13 +173,15 @@ export function SaleDetail({
                 variant="secondary"
                 busy={a.busy}
                 onClick={() =>
-                  void a.run(() => download(`/sales/${id}/receipt`, `receipt-${q.data!.sale.ref}.pdf`))
+                  void a.run(() =>
+                    download(`/sales/${id}/receipt?layout=${layout}`, `receipt-${q.data!.sale.ref}.pdf`),
+                  )
                 }
               >
                 <Download size={14} />
                 Receipt PDF
               </Button>
-              <Button onClick={() => void a.run(() => openDocument(`/sales/${id}/receipt`))}>
+              <Button onClick={() => void a.run(() => openDocument(`/sales/${id}/receipt?layout=${layout}`))}>
                 Print / view receipt <ArrowUpRight size={14} />
               </Button>
             </div>
@@ -197,8 +208,8 @@ export default function Sales() {
       `${s.ref} ${s.staff_name}`.toLowerCase().includes(search.toLowerCase()) &&
       (!method || s.payment_methods?.includes(method)) &&
       (!status ||
-        (status === 'completed' && s.refunded_cents === 0) ||
-        (status === 'returned' && s.refunded_cents > 0)),
+        (status === 'completed' && s.return_status === 'completed') ||
+        (status === 'returned' && s.return_status !== 'completed')),
   );
   useEffect(() => setPage(1), [search, method, status]);
   return (
@@ -235,7 +246,7 @@ export default function Sales() {
           },
           {
             label: 'Returned / corrected sales',
-            value: String(sales.filter((s) => s.refunded_cents > 0).length),
+            value: String(sales.filter((s) => s.return_status !== 'completed').length),
             icon: RotateCcw,
           },
         ].map((s) => (
@@ -326,17 +337,17 @@ export default function Sales() {
                       <td>
                         <Badge
                           tone={
-                            s.refunded_cents === s.total_cents
+                            s.return_status === 'fully_returned'
                               ? 'neutral'
-                              : s.refunded_cents
+                              : s.return_status === 'part_returned'
                                 ? 'amber'
                                 : 'green'
                           }
                           dot
                         >
-                          {s.refunded_cents === s.total_cents
+                          {s.return_status === 'fully_returned'
                             ? 'Fully returned'
-                            : s.refunded_cents
+                            : s.return_status === 'part_returned'
                               ? 'Part returned'
                               : 'Completed'}
                         </Badge>

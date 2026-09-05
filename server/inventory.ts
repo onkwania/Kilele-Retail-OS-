@@ -54,8 +54,17 @@ export function saveSupplier(
   approvalId: string | null = null,
 ) {
   demand(a, 'suppliers.write');
-  const b = supplierSchema.parse(input);
   const original = supplierId ? scoped(db, 'suppliers', supplierId, a, false) : null;
+  const base = original
+    ? Object.fromEntries(
+        Object.keys(supplierSchema.shape)
+          .filter((k) => k !== 'reason')
+          .map((k) => [k, k === 'active' ? !!original.active : original[k]]),
+      )
+    : {};
+  const b = supplierSchema.parse(
+    original && input && typeof input === 'object' && !Array.isArray(input) ? { ...base, ...input } : input,
+  );
   const { reason, active, ...data } = b;
   const row = { ...data, active: active ? 1 : 0 };
   const rid = supplierId ?? id('sup_');
@@ -85,6 +94,9 @@ const purchaseSchema = z
     invoice_ref: z.string().trim().min(2).max(100),
     purchase_date: dateInput,
     payment_method: z.enum(['Credit', 'Cash', 'M-Pesa', 'Card', 'Bank']),
+    payment_reference: z.string().trim().max(100).default(''),
+    input_tax: moneyInput.default('0'),
+    replaces_id: z.string().nullable().default(null),
     notes: z.string().max(2000).default(''),
     document_id: z.string().nullable().default(null),
     items: z
@@ -101,6 +113,24 @@ export function recordSupplierPayment(
   input: { amount: string; method: 'Cash' | 'M-Pesa' | 'Card' | 'Bank'; reference: string },
   approvalId: string | null = null,
 ) {
+  demand(a, 'expenses.create');
+  const reference = input.reference.trim().toUpperCase();
+  requireThat(
+    input.method === 'Cash' || /^[A-Z0-9][A-Z0-9 _/-]{2,99}$/.test(reference),
+    'Enter the actual confirmed electronic payment reference.',
+  );
+  if (input.method !== 'Cash')
+    requireThat(
+      !one(
+        db,
+        'SELECT id FROM supplier_payments WHERE business_id=? AND method=? AND upper(trim(reference))=?',
+        a.business_id,
+        input.method,
+        reference,
+      ),
+      'This supplier transfer reference is already recorded.',
+      409,
+    );
   requireThat(
     !one(db, 'SELECT id FROM purchase_reversals WHERE purchase_id=?', purchase.id),
     'A reversed purchase cannot receive another payment.',
@@ -139,7 +169,7 @@ export function recordSupplierPayment(
     session_id: session?.id ?? null,
     method: input.method,
     amount_cents: value,
-    reference: input.reference,
+    reference,
     created_at: now(),
   };
   insert(db, 'supplier_payments', row);
@@ -235,7 +265,8 @@ export function postPurchase(db: DB, a: Actor, purchaseId: string, approvalId: s
     purchase.ref,
     'Stock received from supplier',
     [
-      { account: 'Inventory', debit: purchase.total_cents },
+      { account: 'Inventory', debit: purchase.total_cents - purchase.input_tax_cents },
+      { account: 'Input VAT', debit: purchase.input_tax_cents },
       { account: 'Accounts payable', credit: purchase.total_cents },
     ],
     approvalId,
@@ -248,7 +279,7 @@ export function postPurchase(db: DB, a: Actor, purchaseId: string, approvalId: s
       {
         amount: `${Math.floor(purchase.total_cents / 100)}.${String(purchase.total_cents % 100).padStart(2, '0')}`,
         method: purchase.payment_method,
-        reference: purchase.invoice_ref,
+        reference: purchase.payment_reference || (purchase.payment_method === 'Cash' ? purchase.ref : ''),
       },
       approvalId,
     );
@@ -263,11 +294,48 @@ export function postPurchase(db: DB, a: Actor, purchaseId: string, approvalId: s
     'Controlled stock receiving',
     approvalId,
   );
-  return { ok: true, id: purchase.id, ref: purchase.ref, status: 'posted' };
+  return { ok: true, id: purchase.id, ref: purchase.ref, status: 'posted', request_id: approvalId };
 }
 export function createPurchase(db: DB, a: Actor, input: unknown) {
   demand(a, 'inventory.receive');
   const b = purchaseSchema.parse(input);
+  let replaces: Row | null = null;
+  if (b.replaces_id) {
+    replaces = scoped(db, 'purchases', b.replaces_id, a);
+    requireThat(
+      !one(db, 'SELECT id FROM purchases WHERE replaces_id=?', replaces.id),
+      'Use the latest linked replacement, not an earlier record.',
+      409,
+    );
+    const rejected = one(
+      db,
+      "SELECT id FROM approval_requests WHERE entity_id=? AND kind='stock_receipt' AND status='rejected'",
+      replaces.id,
+    );
+    const reversed = one(db, 'SELECT id FROM purchase_reversals WHERE purchase_id=?', replaces.id);
+    requireThat(
+      rejected || reversed,
+      'The original receiving must first be independently rejected or reversed.',
+      409,
+    );
+  } else {
+    requireThat(
+      !one(
+        db,
+        `SELECT p.id FROM purchases p WHERE p.business_id=? AND p.supplier_id=? AND lower(trim(p.invoice_ref))=lower(trim(?)) AND NOT EXISTS(SELECT 1 FROM purchases c WHERE c.replaces_id=p.id) AND (EXISTS(SELECT 1 FROM purchase_reversals r WHERE r.purchase_id=p.id) OR EXISTS(SELECT 1 FROM approval_requests r WHERE r.entity_id=p.id AND r.kind='stock_receipt' AND r.status='rejected'))`,
+        a.business_id,
+        b.supplier_id,
+        b.invoice_ref,
+      ),
+      'Use the linked replacement workflow for this rejected/reversed invoice.',
+      409,
+    );
+  }
+  if (!['Credit', 'Cash'].includes(b.payment_method))
+    requireThat(
+      /^[A-Z0-9][A-Z0-9 _/-]{2,99}$/i.test(b.payment_reference),
+      'Enter the actual provider reference or receive on credit and record settlement separately.',
+    );
   const supplier = scoped(db, 'suppliers', b.supplier_id, a, false);
   requireThat(supplier.active, 'Supplier is inactive.');
   if (b.document_id) {
@@ -292,7 +360,13 @@ export function createPurchase(db: DB, a: Actor, input: unknown) {
       total_cents: total([cost * i.quantity]),
     };
   });
-  const value = total(items.map((i) => i.total_cents));
+  const inventoryValue = total(items.map((i) => i.total_cents)),
+    inputTax = cents(b.input_tax);
+  requireThat(
+    inputTax <= inventoryValue,
+    'Recoverable input tax exceeds the inventory valuation cost. Check the invoice.',
+  );
+  const value = total([inventoryValue, inputTax]);
   requireThat(value > 0, 'A purchase total must be greater than zero.');
   const purchase = {
     id: id('po_'),
@@ -302,9 +376,12 @@ export function createPurchase(db: DB, a: Actor, input: unknown) {
     supplier_id: b.supplier_id,
     supplier_name: supplier.name,
     total_cents: value,
+    input_tax_cents: inputTax,
     invoice_ref: b.invoice_ref,
     purchase_date: b.purchase_date,
     payment_method: b.payment_method,
+    payment_reference: b.payment_reference,
+    replaces_id: b.replaces_id,
     notes: b.notes,
     document_id: b.document_id,
     created_at: now(),
@@ -312,14 +389,22 @@ export function createPurchase(db: DB, a: Actor, input: unknown) {
   insert(db, 'purchases', purchase);
   for (const item of items) insert(db, 'purchase_items', { ...item, purchase_id: purchase.id });
   audit(db, a, 'purchase.recorded', 'purchases', purchase.id, null, { ...purchase, items }, b.reason);
-  if (can(a, 'inventory.post')) return postPurchase(db, a, purchase.id);
+  if (can(a, 'inventory.post') && !replaces) return postPurchase(db, a, purchase.id);
   const request = newRequest(db, a, {
     kind: 'stock_receipt',
     entity: 'purchases',
     entity_id: purchase.id,
     reason: b.reason,
+    explanation: b.notes || b.reason,
+    requested_change: `${replaces ? 'Review linked replacement and receive' : 'Approve receiving'} ${items.reduce((sum, item) => sum + item.quantity, 0)} units against invoice ${b.invoice_ref}`,
     payload: { purchase_id: purchase.id },
-    original: { ...purchase, items },
+    original: {
+      ...purchase,
+      items,
+      replaces_original: replaces
+        ? { ...replaces, items: all(db, 'SELECT * FROM purchase_items WHERE purchase_id=?', replaces.id) }
+        : null,
+    },
     evidence_id: b.document_id,
   });
   return { ok: true, id: purchase.id, ref: purchase.ref, status: 'pending', request_id: request.id };
@@ -504,6 +589,12 @@ export function installInventory(app: Express, db: DB) {
       refunds: all(db, 'SELECT * FROM supplier_refunds WHERE purchase_id=?', p.id),
       reversal: one(db, 'SELECT * FROM purchase_reversals WHERE purchase_id=?', p.id),
       receipt: one(db, 'SELECT * FROM purchase_receipts WHERE purchase_id=?', p.id),
+      receiving_request: one(
+        db,
+        "SELECT id,status,review_reason FROM approval_requests WHERE entity_id=? AND kind='stock_receipt'",
+        p.id,
+      ),
+      replacements: all(db, 'SELECT id,ref,invoice_ref FROM purchases WHERE replaces_id=?', p.id),
     });
   });
   app.post('/api/purchases', protect('inventory.receive'), (req, res) =>

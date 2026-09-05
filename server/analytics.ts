@@ -1,6 +1,16 @@
 import type { Express } from 'express';
 import { z } from 'zod';
-import { type DB, type Actor, type Row, all, one, requireThat, kenyaDate, dateInput } from './core.js';
+import {
+  type DB,
+  type Actor,
+  type Row,
+  all,
+  one,
+  requireThat,
+  kenyaDate,
+  dateInput,
+  safeSum,
+} from './core.js';
 import { protect } from './auth.js';
 import { productList } from './products.js';
 export const shiftDate = (date: string, days: number) =>
@@ -70,7 +80,7 @@ export function expenseEvents(db: DB, a: Actor, r: Range): Row[] {
   const [start, end] = bounds(r);
   const positive = all(
     db,
-    `SELECT e.id,e.ref,e.created_at,e.expense_date,e.category,e.amount_cents,e.method payment_method,e.description,e.payee supplier,e.reference,e.user_id staff_id,u.name staff,'expense' event_type FROM expenses e JOIN users u ON u.id=e.user_id WHERE e.business_id=? AND e.branch_id=? AND e.created_at>=? AND e.created_at<? LIMIT 50001`,
+    `SELECT e.id,e.ref,e.created_at,e.expense_date,e.category,e.amount_cents,e.input_tax_cents,e.method payment_method,e.description,e.payee supplier,e.reference,e.user_id staff_id,u.name staff,'expense' event_type FROM expenses e JOIN users u ON u.id=e.user_id WHERE e.business_id=? AND e.branch_id=? AND e.created_at>=? AND e.created_at<? LIMIT 50001`,
     a.business_id,
     a.branch_id,
     start,
@@ -78,7 +88,7 @@ export function expenseEvents(db: DB, a: Actor, r: Range): Row[] {
   );
   const negative = all(
     db,
-    `SELECT er.id,er.ref,er.created_at,e.expense_date,e.category,-er.amount_cents amount_cents,er.method payment_method,er.reason description,e.payee supplier,e.reference,er.user_id staff_id,u.name staff,'reversal' event_type FROM expense_reversals er JOIN expenses e ON e.id=er.expense_id JOIN users u ON u.id=er.user_id WHERE er.business_id=? AND er.branch_id=? AND er.created_at>=? AND er.created_at<? LIMIT 50001`,
+    `SELECT er.id,er.ref,er.created_at,e.expense_date,e.category,-er.amount_cents amount_cents,-e.input_tax_cents input_tax_cents,er.method payment_method,er.reason description,e.payee supplier,e.reference,er.user_id staff_id,u.name staff,'reversal' event_type FROM expense_reversals er JOIN expenses e ON e.id=er.expense_id JOIN users u ON u.id=er.user_id WHERE er.business_id=? AND er.branch_id=? AND er.created_at>=? AND er.created_at<? LIMIT 50001`,
     a.business_id,
     a.branch_id,
     start,
@@ -86,10 +96,11 @@ export function expenseEvents(db: DB, a: Actor, r: Range): Row[] {
   );
   return limited([...positive, ...negative]).map((row) => ({
     ...row,
+    expense_cents: row.amount_cents - (row.input_tax_cents ?? 0),
     date: kenyaDate(new Date(row.created_at)),
   }));
 }
-const sum = (rows: Row[], key: string) => rows.reduce((s, r) => s + (r[key] ?? 0), 0);
+const sum = (rows: Row[], key: string) => safeSum(rows.map((r) => r[key] ?? 0));
 export function aggregate(rows: Row[], groupKey: string): Row[] {
   const grouped = new Map<string, Row>();
   for (const row of rows) {
@@ -103,7 +114,7 @@ export function aggregate(rows: Row[], groupKey: string): Row[] {
       cogs_cents: 0,
     };
     for (const field of ['quantity', 'total_cents', 'revenue_cents', 'profit_cents', 'cogs_cents'])
-      existing[field] += row[field] ?? 0;
+      existing[field] = safeSum([existing[field], row[field] ?? 0]);
     grouped.set(key, existing);
   }
   return [...grouped.values()].sort((a, b) => b.revenue_cents - a.revenue_cents);
@@ -131,7 +142,7 @@ export function stats(db: DB, a: Actor, r: Range) {
   const revenue = sum(events, 'revenue_cents'),
     cogs = sum(events, 'cogs_cents'),
     gross = sum(events, 'total_cents'),
-    expense = sum(expenses, 'amount_cents');
+    expense = sum(expenses, 'expense_cents');
   return {
     gross_cents: gross,
     original_sales_cents: transactions.gross,
@@ -139,7 +150,7 @@ export function stats(db: DB, a: Actor, r: Range) {
     tax_cents: sum(events, 'tax_cents'),
     cogs_cents: cogs,
     profit_cents: revenue - cogs,
-    gross_margin: revenue ? ((revenue - cogs) / revenue) * 100 : null,
+    gross_margin: revenue > 0 ? ((revenue - cogs) / revenue) * 100 : null,
     expenses_cents: expense,
     other_costs_cents: otherCosts,
     operating_cents: revenue - cogs - expense - otherCosts,
@@ -150,8 +161,7 @@ export function stats(db: DB, a: Actor, r: Range) {
 }
 export function staffPerformance(db: DB, a: Actor, r: Range): Row[] {
   const [start, end] = bounds(r),
-    events = saleEvents(db, a, r),
-    expense = expenseEvents(db, a, r);
+    events = saleEvents(db, a, r);
   const users = all(
     db,
     'SELECT id,name,role_id,active,email FROM users WHERE business_id=? AND branch_id=? ORDER BY name',
@@ -159,64 +169,120 @@ export function staffPerformance(db: DB, a: Actor, r: Range): Row[] {
     a.branch_id,
   );
   return users.map((u) => {
+    const parameters = [a.business_id, a.branch_id, u.id, start, end];
     const sales = one(
       db,
-      'SELECT COUNT(*) n,COALESCE(SUM(total_cents),0) gross,COALESCE(SUM(discount_cents),0) discounts FROM sales WHERE user_id=? AND created_at>=? AND created_at<?',
-      u.id,
-      start,
-      end,
+      'SELECT COUNT(*) n,COALESCE(SUM(total_cents),0) gross,COALESCE(SUM(discount_cents),0) discounts FROM sales WHERE business_id=? AND branch_id=? AND user_id=? AND created_at>=? AND created_at<?',
+      ...parameters,
     )!;
     const payments = all(
       db,
-      'SELECT method,SUM(amount_cents) value FROM payments WHERE user_id=? AND created_at>=? AND created_at<? GROUP BY method',
-      u.id,
-      start,
-      end,
+      'SELECT method,SUM(amount_cents) value FROM payments WHERE business_id=? AND branch_id=? AND user_id=? AND created_at>=? AND created_at<? GROUP BY method',
+      ...parameters,
     );
-    const requests = one(
+    const requests = all(
       db,
-      "SELECT COUNT(*) n FROM approval_requests WHERE user_id=? AND created_at>=? AND created_at<? AND kind IN('sale_void','sale_correction','sale_return')",
-      u.id,
-      start,
-      end,
-    )!.n;
+      'SELECT kind FROM approval_requests WHERE business_id=? AND branch_id=? AND user_id=? AND created_at>=? AND created_at<?',
+      ...parameters,
+    );
+    const corrections = requests.filter((r) =>
+      [
+        'sale_void',
+        'sale_correction',
+        'sale_return',
+        'expense_reversal',
+        'expense_correction',
+        'stock_reversal',
+        'purchase_reversal',
+        'supplier_payment_reversal',
+        'closing_correction',
+      ].includes(r.kind),
+    ).length;
     const stock = one(
       db,
-      'SELECT COUNT(*) n FROM inventory_movements WHERE user_id=? AND created_at>=? AND created_at<?',
-      u.id,
-      start,
-      end,
+      'SELECT COUNT(*) n FROM inventory_movements WHERE business_id=? AND branch_id=? AND user_id=? AND created_at>=? AND created_at<?',
+      ...parameters,
     )!.n;
+    const received = one(
+      db,
+      'SELECT COUNT(*) n FROM purchases WHERE business_id=? AND branch_id=? AND user_id=? AND created_at>=? AND created_at<?',
+      ...parameters,
+    )!.n;
+    const expense = one(
+      db,
+      'SELECT COUNT(*) n,COALESCE(SUM(amount_cents),0) gross FROM expenses WHERE business_id=? AND branch_id=? AND user_id=? AND created_at>=? AND created_at<?',
+      ...parameters,
+    )!;
     const closing = one(
       db,
-      "SELECT r.ref,ar.status FROM reconciliations r LEFT JOIN approval_requests ar ON ar.entity_id=r.id AND ar.kind='daily_closing' WHERE r.user_id=? ORDER BY r.created_at DESC LIMIT 1",
-      u.id,
+      "SELECT r.ref,ar.status FROM reconciliations r LEFT JOIN approval_requests ar ON ar.entity_id=r.id AND ar.kind='daily_closing' WHERE r.business_id=? AND r.branch_id=? AND r.user_id=? AND r.created_at>=? AND r.created_at<? ORDER BY r.created_at DESC LIMIT 1",
+      ...parameters,
     );
-    const open = one(db, 'SELECT id FROM cash_sessions WHERE user_id=? AND closed_at IS NULL', u.id);
+    const open =
+      r.to === kenyaDate()
+        ? one(
+            db,
+            'SELECT id FROM cash_sessions WHERE business_id=? AND branch_id=? AND user_id=? AND closed_at IS NULL',
+            a.business_id,
+            a.branch_id,
+            u.id,
+          )
+        : null;
+    const owned = events.filter((e) => e.staff_id === u.id);
     return {
       ...u,
       staff_id: u.id,
       staff: u.name,
       transactions: sales.n,
-      sales_cents: sum(
-        events.filter((e) => e.staff_id === u.id),
-        'total_cents',
-      ),
+      sales_cents: sum(owned, 'total_cents'),
+      revenue_cents: sum(owned, 'revenue_cents'),
       average_cents: sales.n ? Math.round(sales.gross / sales.n) : 0,
       cash_cents: payments.find((p) => p.method === 'Cash')?.value ?? 0,
       mpesa_cents: payments.find((p) => p.method === 'M-Pesa')?.value ?? 0,
       card_cents: payments.find((p) => p.method === 'Card')?.value ?? 0,
       bank_cents: payments.find((p) => p.method === 'Bank')?.value ?? 0,
       discounts_cents: sales.discounts,
-      correction_requests: requests,
-      expenses_cents: sum(
-        expense.filter((e) => e.staff_id === u.id),
-        'amount_cents',
-      ),
+      correction_requests: corrections,
+      requests_total: requests.length,
+      stock_requests: requests.filter((r) =>
+        ['stock_count', 'stock_adjustment', 'stock_receipt', 'wastage', 'damaged'].includes(r.kind),
+      ).length,
+      purchase_entries: received,
+      expenses_cents: expense.gross,
+      expense_entries: expense.n,
       stock_entries: stock,
-      reconciliation_status: open ? 'Session open' : (closing?.status ?? 'No closing yet'),
+      reconciliation_status: open ? 'Session open' : (closing?.status ?? 'No closing in period'),
     };
   });
+}
+/** All recorded operating tender movements; drawer opening counts are not new cash transfers. */
+export function paymentEvents(db: DB, a: Actor, r: Range): Row[] {
+  const [start, end] = bounds(r);
+  const params = [a.business_id, a.branch_id, start, end];
+  const entries: Row[] = [];
+  const query = (sql: string) => entries.push(...all(db, sql, ...params));
+  query(
+    `SELECT p.id,p.created_at,s.ref transaction_ref,p.reference,'sale' source,CASE WHEN p.reversal_id IS NULL THEN 'sale_tender' ELSE 'sale_refund' END event_type,p.method payment_method,p.amount_cents,p.tendered_cents,p.change_cents,p.user_id staff_id,u.name staff,p.session_id FROM payments p JOIN sales s ON s.id=p.sale_id JOIN users u ON u.id=p.user_id WHERE p.business_id=? AND p.branch_id=? AND p.created_at>=? AND p.created_at<? LIMIT 50001`,
+  );
+  query(
+    `SELECT e.id,e.created_at,e.ref transaction_ref,e.reference,'expense' source,'expense_payment' event_type,e.method payment_method,-e.amount_cents amount_cents,NULL tendered_cents,NULL change_cents,e.user_id staff_id,u.name staff,e.session_id FROM expenses e JOIN users u ON u.id=e.user_id WHERE e.business_id=? AND e.branch_id=? AND e.created_at>=? AND e.created_at<? LIMIT 50001`,
+  );
+  query(
+    `SELECT r.id,r.created_at,r.ref transaction_ref,e.reference,'expense' source,'expense_reversal' event_type,r.method payment_method,r.amount_cents,NULL tendered_cents,NULL change_cents,r.user_id staff_id,u.name staff,r.session_id FROM expense_reversals r JOIN expenses e ON e.id=r.expense_id JOIN users u ON u.id=r.user_id WHERE r.business_id=? AND r.branch_id=? AND r.created_at>=? AND r.created_at<? LIMIT 50001`,
+  );
+  query(
+    `SELECT p.id,p.created_at,o.ref transaction_ref,p.reference,'supplier' source,'supplier_payment' event_type,p.method payment_method,-p.amount_cents amount_cents,NULL tendered_cents,NULL change_cents,p.user_id staff_id,u.name staff,p.session_id FROM supplier_payments p JOIN purchases o ON o.id=p.purchase_id JOIN users u ON u.id=p.user_id WHERE p.business_id=? AND p.branch_id=? AND p.created_at>=? AND p.created_at<? LIMIT 50001`,
+  );
+  query(
+    `SELECT p.id,p.created_at,o.ref transaction_ref,r.ref reference,'supplier' source,'supplier_refund' event_type,p.method payment_method,p.amount_cents,NULL tendered_cents,NULL change_cents,p.user_id staff_id,u.name staff,p.session_id FROM supplier_refunds p JOIN purchases o ON o.id=p.purchase_id JOIN purchase_reversals r ON r.id=p.reversal_id JOIN users u ON u.id=p.user_id WHERE p.business_id=? AND p.branch_id=? AND p.created_at>=? AND p.created_at<? LIMIT 50001`,
+  );
+  query(
+    `SELECT p.id,p.created_at,p.ref transaction_ref,o.reference,'supplier' source,'supplier_payment_reversal' event_type,p.method payment_method,p.amount_cents,NULL tendered_cents,NULL change_cents,p.user_id staff_id,u.name staff,p.session_id FROM supplier_payment_reversals p JOIN supplier_payments o ON o.id=p.payment_id JOIN users u ON u.id=p.user_id WHERE p.business_id=? AND p.branch_id=? AND p.created_at>=? AND p.created_at<? LIMIT 50001`,
+  );
+  query(
+    `SELECT l.id,e.created_at,e.reference transaction_ref,e.approval_id reference,'adjustment' source,'cash_variance' event_type,'Cash' payment_method,l.debit_cents-l.credit_cents amount_cents,NULL tendered_cents,NULL change_cents,e.user_id staff_id,u.name staff,NULL session_id FROM journal_lines l JOIN journal_entries e ON e.id=l.entry_id JOIN users u ON u.id=e.user_id WHERE l.business_id=? AND l.branch_id=? AND e.created_at>=? AND e.created_at<? AND l.account='Cash on hand' AND e.description='Approved cash variance' LIMIT 50001`,
+  );
+  return limited(entries).sort((a, b) => a.created_at.localeCompare(b.created_at));
 }
 export function dashboard(db: DB, a: Actor, r: Range) {
   const events = saleEvents(db, a, r),
@@ -238,7 +304,7 @@ export function dashboard(db: DB, a: Actor, r: Range) {
             stock: product.stock,
           }
         : {}),
-      margin: g.revenue_cents ? (g.profit_cents / g.revenue_cents) * 100 : null,
+      margin: g.revenue_cents > 0 ? (g.profit_cents / g.revenue_cents) * 100 : null,
     };
   });
   const days = Math.round((new Date(r.to).getTime() - new Date(r.from).getTime()) / 86400_000) + 1;
@@ -264,7 +330,8 @@ export function dashboard(db: DB, a: Actor, r: Range) {
   );
   const cashVariance = one(
     db,
-    `SELECT COALESCE(SUM(COALESCE((SELECT ra.variance_cents FROM reconciliation_adjustments ra WHERE ra.reconciliation_id=r.id ORDER BY ra.rowid DESC LIMIT 1),r.variance_cents)),0) n FROM reconciliations r WHERE r.business_id=? AND r.branch_id=? AND r.created_at>=? AND r.created_at<?`,
+    `SELECT COALESCE(SUM(COALESCE((SELECT ra.variance_cents FROM reconciliation_adjustments ra WHERE ra.reconciliation_id=r.id AND ra.created_at<? ORDER BY ra.rowid DESC LIMIT 1),r.variance_cents)),0) n FROM reconciliations r WHERE r.business_id=? AND r.branch_id=? AND r.created_at>=? AND r.created_at<?`,
+    end,
     a.business_id,
     a.branch_id,
     start,

@@ -12,6 +12,7 @@ import {
   scoped,
   roundRatio,
   audit,
+  can,
 } from './core.js';
 export function inventoryFor(db: DB, a: Actor, productId: string) {
   scoped(db, 'products', productId, a, false);
@@ -58,6 +59,10 @@ export function moveStock(
   requireThat(Number.isSafeInteger(input.value_delta_cents), 'Stock value must be an exact amount.');
   const quantity = previous.quantity + input.quantity,
     value = previous.value_cents + input.value_delta_cents;
+  requireThat(
+    Number.isSafeInteger(quantity) && Number.isSafeInteger(value),
+    'Inventory balance exceeds exact supported integer limits.',
+  );
   requireThat(quantity >= 0 && value >= 0, 'Insufficient stock or stock value.', 409);
   requireThat(quantity !== 0 || value === 0, 'Empty inventory must have zero value.', 409);
   const row = {
@@ -112,6 +117,11 @@ export function ownSession(db: DB, a: Actor, sessionId?: string) {
 }
 export function sessionTotals(db: DB, a: Actor, sessionId: string) {
   const s = scoped(db, 'cash_sessions', sessionId, a);
+  requireThat(
+    s.user_id === a.id || can(a, 'reconciliations.read'),
+    'You may only inspect your own register session.',
+    403,
+  );
   const payments = all(
     db,
     'SELECT method,COALESCE(SUM(amount_cents),0) n FROM payments WHERE session_id=? GROUP BY method',
