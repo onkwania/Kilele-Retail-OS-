@@ -13,7 +13,7 @@ export const REQUEST_KINDS=['sale_void','sale_return','sale_correction','expense
 const requestSchema=z.object({kind:z.enum(REQUEST_KINDS),entity_id:z.string().default(''),reason:reasonInput,explanation:z.string().trim().max(2000).default(''),requested_change:z.string().trim().max(2000).default(''),evidence_id:z.string().nullable().default(null),payload:z.record(z.string(),z.unknown()).default({})}).strict();
 const returnItemsSchema=z.array(z.object({sale_item_id:z.string(),quantity:quantityInput}).strict()).min(1).max(100);
 export function createCorrectionRequest(db:DB,a:Actor,input:unknown) {
-  demand(a,'requests.create');const b=requestSchema.parse(input);let entity='',entityId=b.entity_id,payload:Row={},original:unknown={};
+  demand(a,'requests.create');const b=requestSchema.parse(input);let entity:string,entityId=b.entity_id,payload:Row={},original:unknown;
   if(['sale_void','sale_return','sale_correction'].includes(b.kind)) {
     demand(a,'sales.read');const details=saleDetail(db,a,b.entity_id);entity='sales';original=details;
     const items=b.kind==='sale_return'?returnItemsSchema.parse(b.payload.items):details.items.filter(i=>i.returned_qty<i.quantity).map(i=>({sale_item_id:i.id,quantity:i.quantity-i.returned_qty}));

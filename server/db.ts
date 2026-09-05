@@ -18,6 +18,7 @@ export function createDb(path = ':memory:') {
   db.pragma('synchronous = FULL');
   db.pragma('busy_timeout = 5000');
   db.exec(readFileSync(resolve('server/schema.sql'), 'utf8'));
+  if (!all(db,'PRAGMA table_info(documents)').some(c=>c.name==='purpose')) db.exec("ALTER TABLE documents ADD COLUMN purpose TEXT NOT NULL DEFAULT 'request'");
   for (const table of immutable) {
     for (const op of ['UPDATE','DELETE']) db.exec(`CREATE TRIGGER IF NOT EXISTS immutable_${table}_${op.toLowerCase()} BEFORE ${op} ON ${table} BEGIN SELECT RAISE(ABORT, '${table} records are immutable; request a correction'); END;`);
   }

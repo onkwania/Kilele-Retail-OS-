@@ -4,6 +4,9 @@ import cookieParser from 'cookie-parser';
 import { rateLimit } from 'express-rate-limit';
 import { ZodError } from 'zod';
 import { type DB, AppError, integrity } from './core.js';
+import { installManagement } from './management.js';
+import { installReports } from './reports.js';
+import { installAnalytics } from './analytics.js';
 import { installApprovals } from './approvals.js';
 import { installExpenses } from './expenses.js';
 import { installInventory } from './inventory.js';
@@ -29,6 +32,9 @@ export function createApp(db: DB, options: AppOptions = {}) {
   installInventory(app,db);
   installExpenses(app,db);
   installApprovals(app,db);
+  installAnalytics(app,db);
+  installReports(app,db);
+  installManagement(app,db);
   // DOMAIN_ROUTES
   app.use('/api', (_req, res) => res.status(404).json({ error: 'Endpoint not found.' }));
   app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
