@@ -1,37 +1,34 @@
-# This workflow will build and push a Docker container to an Azure Web App when a commit is pushed to your default branch.
+# OPTIONAL, NOT CONFIGURED — container deployment template.
 #
-# This workflow assumes you have already created the target Azure App Service web app.
-# For instructions see https://docs.microsoft.com/en-us/azure/app-service/quickstart-custom-container?tabs=dotnet&pivots=container-linux
+# Why this no longer runs automatically:
+#   1. As shipped by GitHub it triggered on every push to `main`, published an image to ghcr.io and
+#      then attempted a deploy against the literal placeholder app name `your-app-name` with an
+#      `AZURE_WEBAPP_PUBLISH_PROFILE` secret that does not exist. Every commit therefore produced a
+#      red deployment and an unintended public image.
+#   2. More importantly, this target contradicts the supported deployment for this application.
+#      Kilele is one Node process with a LOCAL PERSISTENT SQLite volume; docs/DEPLOYMENT.md states
+#      explicitly: "Do not use ephemeral/serverless storage, NFS/network shares for the SQLite file,
+#      or multiple app replicas." Azure Web App for Containers storage is ephemeral and scales
+#      horizontally, so a financial ledger placed there can be lost or split on restart/scale-out.
 #
-# To configure this workflow:
+# The supported private deployment is deploy/compose.yaml + deploy/Caddyfile on a host with a real
+# persistent volume. If you genuinely want a container platform, attach a durable disk/volume to
+# /app/data first, prove a backup and a fresh-path restore against it, then fill in the values below
+# and switch the trigger back on deliberately.
 #
-# 1. Download the Publish Profile for your Azure Web App. You can download this file from the Overview page of your Web App in the Azure Portal.
-#    For more information: https://docs.microsoft.com/en-us/azure/app-service/deploy-github-actions?tabs=applevel#generate-deployment-credentials
-#
-# 2. Create a secret in your repository named AZURE_WEBAPP_PUBLISH_PROFILE, paste the publish profile contents as the value of the secret.
-#    For instructions on obtaining the publish profile see: https://docs.microsoft.com/azure/app-service/deploy-github-actions#configure-the-github-secret
-#
-# 3. Create a GitHub Personal access token with "repo" and "read:packages" permissions.
-#
-# 4. Create three app settings on your Azure Web app:
-#       DOCKER_REGISTRY_SERVER_URL: Set this to "https://ghcr.io"
-#       DOCKER_REGISTRY_SERVER_USERNAME: Set this to the GitHub username or organization that owns the repository
-#       DOCKER_REGISTRY_SERVER_PASSWORD: Set this to the value of your PAT token from the previous step
-#
-# 5. Change the value for the AZURE_WEBAPP_NAME.
-#
-# For more information on GitHub Actions for Azure: https://github.com/Azure/Actions
-# For more information on the Azure Web Apps Deploy action: https://github.com/Azure/webapps-deploy
-# For more samples to get started with GitHub Action workflows to deploy to Azure: https://github.com/Azure/actions-workflow-samples
+# To configure:
+#   1. Set AZURE_WEBAPP_NAME below to your real Azure App Service name.
+#   2. Create the AZURE_WEBAPP_PUBLISH_PROFILE repository secret from the Azure Portal publish profile.
+#   3. Configure DOCKER_REGISTRY_SERVER_URL / _USERNAME / _PASSWORD app settings for ghcr.io.
+#   4. Attach persistent storage for /app/data and verify a restore drill (deploy/backup.sh).
 
-name: Build and deploy a container to an Azure Web App
+name: Build and deploy a container to an Azure Web App (manual, unconfigured)
 
 env:
-  AZURE_WEBAPP_NAME: your-app-name  # set this to the name of your Azure Web App
+  AZURE_WEBAPP_NAME: your-app-name # REQUIRED: set this to the name of your Azure Web App
 
 on:
-  push:
-    branches: [ "main" ]
+  # Manual only. This must never fire on an ordinary commit: see the header note.
   workflow_dispatch:
 
 permissions:
@@ -42,6 +39,20 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Refuse to run while the template is unconfigured
+        env:
+          # Deliberately a different name: a step env var must not shadow the value it is checking.
+          TARGET_APP: ${{ env.AZURE_WEBAPP_NAME }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TARGET_APP}" ] || [ "${TARGET_APP}" = "your-app-name" ]; then
+            echo "::error::AZURE_WEBAPP_NAME is still the GitHub template placeholder."
+            echo "This workflow is an unconfigured optional template. Read its header comment:"
+            echo "the supported Kilele deployment is a single process with a persistent local"
+            echo "SQLite volume (deploy/compose.yaml), not ephemeral container-app storage."
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
@@ -74,6 +85,16 @@ jobs:
       url: ${{ steps.deploy-to-webapp.outputs.webapp-url }}
 
     steps:
+      - name: Require the publish profile secret
+        run: |
+          set -euo pipefail
+          if [ -z "${AZURE_WEBAPP_PUBLISH_PROFILE:-}" ]; then
+            echo "::error::AZURE_WEBAPP_PUBLISH_PROFILE is not configured."
+            exit 1
+          fi
+        env:
+          AZURE_WEBAPP_PUBLISH_PROFILE: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+
       - name: Lowercase the repo name and username
         run: echo "REPO=${GITHUB_REPOSITORY,,}" >>${GITHUB_ENV}
 

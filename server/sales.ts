@@ -157,7 +157,8 @@ export function quoteSale(db: DB, a: Actor, input: z.infer<typeof quoteSchema>) 
 export function createSale(db: DB, a: Actor, input: unknown) {
   const b = saleSchema.parse(input);
   const session = ownSession(db, a, b.session_id);
-  if (b.customer_id) scoped(db, 'customers', b.customer_id, a, false);
+  // A customer is business-scoped master data; `scoped` fails closed on a foreign tenant's id.
+  const customer = b.customer_id ? scoped(db, 'customers', b.customer_id, a, false) : null;
   const q = quoteSale(db, a, { items: b.items, discount: b.discount, discount_reason: b.discount_reason });
   requireThat(
     !q.items.some((i) => ['Spirits', 'Wines', 'Beer & Cider'].includes(i.category_name)) || b.age_confirmed,
@@ -211,7 +212,15 @@ export function createSale(db: DB, a: Actor, input: unknown) {
     a.branch_id,
     a.business_id,
   )!;
-  const receiptSnapshot = { business, branch, register: session.register, staff_name: a.name };
+  // The customer identity is snapshotted with the merchant identity: a later master-data edit must
+  // not rewrite what an old receipt says about who bought the goods.
+  const receiptSnapshot = {
+    business,
+    branch,
+    register: session.register,
+    staff_name: a.name,
+    customer: customer ? { id: customer.id, name: customer.name } : null,
+  };
   insert(db, 'sales', {
     id: saleId,
     ref: saleRef,
@@ -285,6 +294,10 @@ export function saleDetail(
 ): { sale: Row; items: Row[]; payments: Row[]; reversals: Row[] } {
   const sale = scoped(db, 'sales', saleId, a);
   requireThat(a.role_id !== 'cashier' || sale.user_id === a.id, 'You may only view your own sales.', 403);
+  sale.customer_name = sale.customer_id
+    ? (one(db, 'SELECT name FROM customers WHERE id=? AND business_id=?', sale.customer_id, sale.business_id)
+        ?.name ?? null)
+    : null;
   const items = all(db, 'SELECT * FROM sale_items WHERE sale_id=?', saleId),
     payments = all(db, 'SELECT * FROM payments WHERE sale_id=? ORDER BY created_at', saleId);
   const reversals = all(
@@ -320,6 +333,9 @@ export function renderReceipt(
   const snapshot = sale.receipt_snapshot_json ? JSON.parse(sale.receipt_snapshot_json) : null;
   const business = snapshot?.business ?? currentBusiness,
     branch = snapshot?.branch ?? currentBranch;
+  // Snapshot identity wins. A sale recorded before customer snapshots existed falls back to the
+  // business-scoped master row, which this application never rewrites.
+  const customerName: string | null = snapshot?.customer?.name ?? sale.customer_name ?? null;
   const width = layout === 'a4' ? 595.28 : layout === '58mm' ? 164.41 : 226.77,
     margin = layout === 'a4' ? 36 : 14;
   const font = layout === '58mm' ? 8 : 9;
@@ -337,7 +353,13 @@ export function renderReceipt(
     { text: sale.ref, bold: true, center: true, gap: 7 },
     { text: new Date(sale.created_at).toLocaleString('en-KE', { timeZone: 'Africa/Nairobi' }) + ' EAT' },
     { text: `Register: ${snapshot?.register ?? 'Not recorded'}` },
-    { text: `Served by: ${snapshot?.staff_name ?? sale.staff_name}`, gap: 8 },
+    // A walk-in sale renders exactly as it always did; only a recorded customer adds a line.
+    ...(customerName
+      ? [
+          { text: `Served by: ${snapshot?.staff_name ?? sale.staff_name}` },
+          { text: `Sold to: ${customerName}`, gap: 8 },
+        ]
+      : [{ text: `Served by: ${snapshot?.staff_name ?? sale.staff_name}`, gap: 8 }]),
     ...(!snapshot
       ? [
           {
@@ -430,7 +452,7 @@ export function installSales(app: Express, db: DB) {
     const a = req.actor;
     const rows = all(
       db,
-      `SELECT s.*,u.name staff_name,(SELECT GROUP_CONCAT(DISTINCT method) FROM payments WHERE sale_id=s.id AND reversal_id IS NULL) payment_methods,
+      `SELECT s.*,u.name staff_name,(SELECT c.name FROM customers c WHERE c.id=s.customer_id AND c.business_id=s.business_id) customer_name,(SELECT GROUP_CONCAT(DISTINCT method) FROM payments WHERE sale_id=s.id AND reversal_id IS NULL) payment_methods,
       (SELECT COALESCE(SUM(total_cents),0) FROM sale_reversals WHERE sale_id=s.id) refunded_cents,(SELECT COUNT(*) FROM sale_items WHERE sale_id=s.id) item_count,(SELECT SUM(quantity) FROM sale_items WHERE sale_id=s.id) sold_quantity,(SELECT COALESCE(SUM(ri.quantity),0) FROM sale_return_items ri JOIN sale_items si ON si.id=ri.sale_item_id WHERE si.sale_id=s.id) returned_quantity
       FROM sales s JOIN users u ON u.id=s.user_id WHERE s.business_id=? AND s.branch_id=? ${a.role_id === 'cashier' ? 'AND s.user_id=?' : ''} ORDER BY s.created_at DESC LIMIT 2000`,
       a.business_id,

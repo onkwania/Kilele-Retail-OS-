@@ -165,7 +165,8 @@ export default function Layout() {
                 <Check size={16} />
                 {auth.branch?.name}
               </p>
-              <small>{auth.branch?.location || 'Nairobi, Kenya'}</small>
+              {/* The owner supplies the real branch location; never invent an address for them. */}
+              <small>{auth.branch?.location || 'Branch location not set'}</small>
               {auth.can('settings.write') && (
                 <button
                   onClick={() => {

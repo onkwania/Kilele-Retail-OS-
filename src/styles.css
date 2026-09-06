@@ -4442,8 +4442,109 @@ button::-moz-focus-inner {
 .cart-customer > span {
   flex: 1;
 }
+.cart-customer > .cart-customer-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* A badge is a pill, not a stretched band: keep it at its natural width. */
+.cart-customer > .badge {
+  flex: 0 0 auto;
+}
 .cart-customer .badge {
   font-size: 9.5px;
+}
+/* The customer row is an action, so it is a real button with the same resting appearance. */
+.cart-customer-action {
+  width: 100%;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid #edf3e3;
+  text-align: left;
+  font-size: 11px;
+}
+.cart-customer-action:hover {
+  background: #f7faf1;
+}
+.customer-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.customer-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-height: 60px;
+  max-height: 290px;
+  overflow-y: auto;
+}
+.customer-option {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 11px 13px;
+  background: #fbfcf8;
+  border: 1px solid #e7efdc;
+  border-radius: 9px;
+  text-align: left;
+  color: #5d6b4f;
+}
+.customer-option:hover {
+  background: #f6faf0;
+  border-color: #cdddc0;
+}
+.customer-option.active {
+  background: #f2f8ea;
+  border-color: #9dbb8c;
+  color: #3d5a34;
+}
+.customer-option > svg {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: #5c7948;
+}
+.customer-avatar {
+  display: grid;
+  place-content: center;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: #edf3e6;
+  color: #5f7a49;
+  font-size: 10.5px;
+  font-weight: 650;
+}
+.customer-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+.customer-identity strong {
+  font-size: 12px;
+  font-weight: 550;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.customer-identity small {
+  font-size: 10px;
+  color: #7b8770;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.customer-new {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-top: 16px;
+  border-top: 1px solid #edf3e3;
 }
 .cart-lines {
   flex: 1;

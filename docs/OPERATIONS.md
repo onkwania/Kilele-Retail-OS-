@@ -45,10 +45,11 @@ An item returned by a customer is restored to sellable stock by the approved ret
 1. **Open your register** and count the physical opening cash. A person has one live session; an open register name cannot be shared concurrently.
 2. Scan a barcode, enter an exact SKU, or search the product/brand. Press Enter to add an exact match. Increase/decrease quantity within available stock.
 3. Remove or clear **unposted draft** lines as necessary. This does not delete a transaction. Discount/wholesale controls are permission-dependent and revalidated on the server.
-4. **Take payment**. Choose cash, M-Pesa, card, bank or a split. Tender amounts must match the quote; only cash accepts excess tender with recorded change.
-5. Personally verify electronic transfers against the provider. The application is a record of that confirmation, not a payment gateway.
-6. Confirm payment and complete. A single database transaction records sale snapshots, stock, tenders, journal, audit and durable submission outcome.
-7. Download or open the receipt PDF, then start the next customer. In an embedded evaluation preview, print/view actions download the authenticated file so it can be opened or printed safely outside the frame.
+4. Optionally choose the customer row above the cart to attach a **recorded customer**, or create one at the till (name required; phone and email optional). Leaving it as _Walk-in customer_ attaches nothing, and the sale body is then identical to a sale made before this control existed. Attaching a customer only associates a name with a sale that has already been paid: **Kilele has no customer credit account, balance, statement or receivable ledger**, and attaching one never defers or splits payment. The name is snapshotted with the merchant identity, so a later master-data change cannot rewrite an old receipt, and it prints as `Sold to:` only when a customer is recorded.
+5. **Take payment**. Choose cash, M-Pesa, card, bank or a split. Tender amounts must match the quote; only cash accepts excess tender with recorded change.
+6. Personally verify electronic transfers against the provider. The application is a record of that confirmation, not a payment gateway.
+7. Confirm payment and complete. A single database transaction records sale snapshots, stock, tenders, journal, audit and durable submission outcome.
+8. Download or open the receipt PDF, then start the next customer. In an embedded evaluation preview, print/view actions download the authenticated file so it can be opened or printed safely outside the frame.
 
 ### If the response disappears
 

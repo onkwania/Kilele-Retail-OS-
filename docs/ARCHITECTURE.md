@@ -62,6 +62,14 @@ Audit rows contain actor/role/entity/time/before/after/reason/IP/device/approval
 
 `GET /api/intelligence/features?from=YYYY-MM-DD&to=YYYY-MM-DD` requires report permission and emits a versioned read-only metrics/product-feature document. It has no model API key and no write capability. An external recommendation service can consume approved features. Any proposed financial change must enter the same human-reviewed workflow, never mutate a ledger autonomously.
 
+## Customer records
+
+`customers` is business-scoped master data with a composite `sales.customer_id` foreign key. The POS attaches a recorded customer to the sale in progress or creates one at the till; a walk-in sale omits `customer_id` entirely, so its request body and durable-key fingerprint are unchanged. `customer_name` is projected into sale reads and snapshotted into `receipt_snapshot_json` beside the merchant, branch and register identity, so a later master-data change cannot rewrite what an old receipt says about who bought the goods. Records are create-and-attach: there is no edit, deactivate, merge or delete path, and **no customer balance, credit limit, statement or receivable ledger exists**. Attaching a customer never defers payment — the sale still requires tenders that exactly match the total.
+
+## Continuous verification
+
+`.github/workflows/ci.yml` runs the automated suite, TypeScript, ESLint, Prettier, the production build, the Cloudflare Pages output guard and `npm audit --omit=dev` on every push and pull request, then runs the real-browser scenarios in a dependent job and uploads both artifacts. The two other workflows in that directory are optional and inert by default: the Azure container template is manual-dispatch only and refuses to run while its placeholder app name is set (ephemeral container-app storage also contradicts the persistent-volume requirement in [DEPLOYMENT.md](DEPLOYMENT.md)), and the SLSA generator attests the compiled `dist/` artifacts it actually builds. CI proves the software chains work; it cannot close the external fiscal, provider, hardware or host gates.
+
 ## Threat model and explicit limits
 
 The application protects ordinary and administrator users from unauthorised application-level reads/writes and silent historical changes. The host, deployment administrator and database/file owner are trusted. Someone with filesystem/database-owner access can drop triggers or rewrite both a database and its hash chain; this is not a tamper-proof external ledger. Restricted host access, encrypted/off-site backups and independently anchored hashes are required for stronger assurance.

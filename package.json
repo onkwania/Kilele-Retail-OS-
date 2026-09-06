@@ -19,8 +19,8 @@
     "backup": "tsx server/backup.ts",
     "restore": "tsx server/restore.ts",
     "catalogue:update": "tsx server/catalogue-update.ts",
-    "format": "prettier --write src server shared functions scripts tests e2e docs *.ts *.json *.md deploy",
-    "format:check": "prettier --check src server shared functions scripts tests e2e docs *.ts *.json *.md deploy",
+    "format": "prettier --write src server shared functions scripts tests e2e docs .github *.ts *.json *.md deploy",
+    "format:check": "prettier --check src server shared functions scripts tests e2e docs .github *.ts *.json *.md deploy",
     "build:pages": "npm run typecheck && vite build && node scripts/check-pages-build.mjs",
     "check:pages": "node scripts/check-pages-build.mjs",
     "check:deployment": "node scripts/check-deployment.mjs"

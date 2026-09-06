@@ -4,9 +4,9 @@ A working, production-oriented retail POS and business-management application fo
 
 **This is not a visual-only prototype.** The cashier, catalogue, inventory, purchases, expenses, reconciliation, approval, reporting, staff and audit screens use authenticated APIs and persisted records. A separate, permanently marked preview workspace is available for evaluation.
 
-## Second-pass audit
+## Audit status
 
-The existing architecture was audited and extended, not rebuilt. See the [second-pass audit/final status](docs/SECOND_PASS_AUDIT.md), [181-row requirement matrix](docs/REQUIREMENTS_MATRIX.md) and [execution evidence](docs/SECOND_PASS_VERIFICATION.json). The updated suite contains **86 automated tests and eight real-browser scenarios**. External fiscal, provider, hardware and host acceptance gates remain open; this is **not an unconditional production go-live declaration**.
+The existing architecture was audited and extended, not rebuilt. See the [third-pass gap audit](docs/GAP_AUDIT.md), the [second-pass audit/final status](docs/SECOND_PASS_AUDIT.md), the [181-row requirement matrix](docs/REQUIREMENTS_MATRIX.md) and [execution evidence](docs/SECOND_PASS_VERIFICATION.json). The suite currently contains **106 automated tests across 20 files and nine real-browser scenarios**, and every push and pull request is verified by [continuous integration](.github/workflows/ci.yml) rather than by manual discipline alone. External fiscal, provider, hardware and host acceptance gates remain open; this is **not an unconditional production go-live declaration**.
 
 ## Cloudflare Pages deployment
 
@@ -23,6 +23,7 @@ For the connected Pages project, use **`npm run build:pages` → `dist/client`**
 | Review automated acceptance and limitations    | [Verification record](docs/ACCEPTANCE.md)                                            |
 | Inspect the starter catalogue’s evidence       | [Catalogue notes](docs/CATALOGUE.md) / [source register](docs/catalogue-sources.csv) |
 | Follow implementation checkpoints              | [Implementation log](docs/IMPLEMENTATION.md)                                         |
+| See what CI enforces on every push             | [CI workflow](.github/workflows/ci.yml) / [gap audit](docs/GAP_AUDIT.md)             |
 
 ### Preview
 
@@ -53,7 +54,7 @@ The browser suite needs Chromium’s system libraries and `openssl` for local, e
 
 ## Operational capabilities
 
-- Fast SKU/barcode/name/brand search, quantity controls, quotes, authorised discounts, cash with change, M-Pesa/card/bank references and split tenders.
+- Fast SKU/barcode/name/brand search, quantity controls, quotes, authorised discounts, cash with change, M-Pesa/card/bank references and split tenders. A recorded customer may be attached to a sale or created at the till; this is an association only and **never opens a credit account or a customer balance**.
 - Snapshot-based receipts as 58 mm, 80 mm or A4 print-ready PDFs. Durable keys, response-loss recovery and race-safe cancellation of **unposted** financial submissions, including expenses, receiving and approvals.
 - Editable catalogue metadata and nullable, versioned, manually maintained buying/retail/wholesale/promo prices; spreadsheet-like bulk pricing and staged CSV/TSV import.
 - Opening stock, supplier receiving, moving weighted-average costing, counts, wastage/damage and a before/after movement ledger.

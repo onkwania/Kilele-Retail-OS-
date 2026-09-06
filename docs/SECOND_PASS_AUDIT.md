@@ -1,5 +1,7 @@
 # Kilele Retail OS — second-pass audit and completion
 
+> **Dated checkpoint — 2026-09-05.** The counts below describe this second pass and are preserved as written. The repository has since been audited again: see [GAP_AUDIT.md](GAP_AUDIT.md) for the third-pass findings (no CI at all, a fabricated branch address in the sidebar, unreachable customer master data, documentation drift) and for the current suite size. Continuous verification now runs on every push via [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
+
 ## Baseline and method
 
 Baseline commit: `1731254`. The working tree was clean. This is an extension/hardening audit, not a rebuild.
@@ -88,7 +90,7 @@ The receipt/price/stock/approval/auth/reporting engines are the existing ones. T
 
 Every requested command was run afresh. The initial final pass found six unused imports in the new API regression test, which caused lint and the `verify` chain to fail. The imports were removed; lint and the complete `verify` chain were run again successfully. Earlier test-authoring failures (selector names, expected conflict status and TypeScript fixture typing) were investigated and corrected rather than ignored.
 
-Current evidence: **86 tests / 18 test files**, **8 Chromium scenarios**, typecheck, lint, production build, DB integrity and runtime dependency audit passing. Zero runtime dependency advisories were reported by the executed audit; this is not a guarantee against unknown/future vulnerabilities. See [machine-readable command history](SECOND_PASS_VERIFICATION.json), including the failed attempt and its resolution.
+Evidence at this checkpoint: **86 tests / 18 test files**, **8 Chromium scenarios**, typecheck, lint, production build, DB integrity and runtime dependency audit passing. (Superseded — the suite has since grown; see [GAP_AUDIT.md](GAP_AUDIT.md).) Zero runtime dependency advisories were reported by the executed audit; this is not a guarantee against unknown/future vulnerabilities. See [machine-readable command history](SECOND_PASS_VERIFICATION.json), including the failed attempt and its resolution.
 
 The evaluated database remains a preview with 140 products, no configured buying/selling prices and zero stock. Schema versions 1/2/3 are present. Automated financial fixtures were not copied into this database. Pre-existing values and audit entries were preserved; normal new preview-login audit entries are expected when the live viewer reconnects.
 
