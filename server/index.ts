@@ -13,13 +13,25 @@ if (production && preview) throw new Error('Preview mode is prohibited in produc
 const db = createDb(process.env.DATABASE_PATH ?? './data/kilele.sqlite');
 guardEnvironment(db, preview, production);
 if (!one(db, 'SELECT id FROM users LIMIT 1')) {
-  if (!preview) throw new Error('Run npm run bootstrap with owner credentials before starting the server.');
-  bootstrap(db, {
-    name: 'Workspace Owner',
-    email: 'owner@preview.kilele.local',
-    password: randomBytes(36).toString('base64url'),
-    business: 'Kilele Bottle Store',
-  });
+  if (preview) {
+    bootstrap(db, {
+      name: 'Workspace Owner',
+      email: 'owner@preview.kilele.local',
+      password: randomBytes(36).toString('base64url'),
+      business: 'Kilele Bottle Store',
+    });
+  } else {
+    const name = process.env.BOOTSTRAP_NAME;
+    const email = process.env.BOOTSTRAP_EMAIL;
+    const password = process.env.BOOTSTRAP_PASSWORD;
+    const business = process.env.BUSINESS_NAME;
+    if (!name || name.length < 2 || !email || !email.includes('@') || !password || password.length < 12 || !business || business.length < 2)
+      throw new Error(
+        'Production database is uninitialised. Set BOOTSTRAP_NAME, BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD (minimum 12 characters), and BUSINESS_NAME once, then restart.',
+      );
+    bootstrap(db, { name, email, password, business });
+    console.log(`Workspace bootstrapped for ${email}. Remove BOOTSTRAP_NAME, BOOTSTRAP_EMAIL, and BOOTSTRAP_PASSWORD.`);
+  }
 }
 seedCatalogue(db, actorFor(db, one(db, "SELECT id FROM users WHERE role_id='super_admin' LIMIT 1")!.id)!);
 const proxy = process.env.TRUST_PROXY;
