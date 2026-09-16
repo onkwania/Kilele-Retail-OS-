@@ -73,6 +73,61 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  postgres:
+    name: PostgreSQL schema, triggers and ledger checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # A real PostgreSQL server, not a mock: the whole point of this job is to prove that the
+    # financial protections in server/postgres/migrations actually reject bad writes.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: kilele
+          POSTGRES_PASSWORD: ci-only-not-a-secret
+          POSTGRES_DB: kilele
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kilele -d kilele"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://kilele:ci-only-not-a-secret@127.0.0.1:5432/kilele
+      # A missing database must fail this job, never silently skip the suite.
+      REQUIRE_POSTGRES_TESTS: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Connection round trip
+        run: npm run db:pg:ping
+
+      - name: Apply migrations from Git
+        run: npm run db:pg:migrate
+
+      - name: Re-running migrations changes nothing
+        run: |
+          npm run db:pg:migrate > /tmp/migrate-again.json
+          grep -q '"applied": \[\]' /tmp/migrate-again.json
+
+      - name: Every financial protection is installed
+        run: npm run db:pg:protections
+
+      - name: Behavioural trigger, transaction and ledger-check suite
+        run: npm run db:pg:test
+
+      - name: Ledger integrity report
+        run: npm run db:pg:check
+
   browser:
     name: Real-browser acceptance scenarios
     runs-on: ubuntu-latest

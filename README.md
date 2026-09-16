@@ -6,7 +6,7 @@ A working, production-oriented retail POS and business-management application fo
 
 ## Audit status
 
-The existing architecture was audited and extended, not rebuilt. See the [third-pass gap audit](docs/GAP_AUDIT.md), the [second-pass audit/final status](docs/SECOND_PASS_AUDIT.md), the [181-row requirement matrix](docs/REQUIREMENTS_MATRIX.md) and [execution evidence](docs/SECOND_PASS_VERIFICATION.json). The suite currently contains **115 automated tests across 21 files and ten real-browser scenarios**, and every push and pull request is verified by [continuous integration](.github/workflows/ci.yml) rather than by manual discipline alone. External fiscal, provider, hardware and host acceptance gates remain open; this is **not an unconditional production go-live declaration**.
+The existing architecture was audited and extended, not rebuilt. See the [third-pass gap audit](docs/GAP_AUDIT.md), the [second-pass audit/final status](docs/SECOND_PASS_AUDIT.md), the [181-row requirement matrix](docs/REQUIREMENTS_MATRIX.md) and [execution evidence](docs/SECOND_PASS_VERIFICATION.json). The suite currently contains **132 automated tests across 23 files, ten real-browser scenarios, and 39 PostgreSQL schema/trigger tests that CI runs against a real `postgres:16` server**, and every push and pull request is verified by [continuous integration](.github/workflows/ci.yml) rather than by manual discipline alone. External fiscal, provider, hardware and host acceptance gates remain open; this is **not an unconditional production go-live declaration**.
 
 ## Cloudflare Pages deployment
 
@@ -24,6 +24,7 @@ For the connected Pages project, use **`npm run build:pages` → `dist/client`**
 | Inspect the starter catalogue’s evidence       | [Catalogue notes](docs/CATALOGUE.md) / [source register](docs/catalogue-sources.csv) |
 | Follow implementation checkpoints              | [Implementation log](docs/IMPLEMENTATION.md)                                         |
 | See what CI enforces on every push             | [CI workflow](.github/workflows/ci.yml) / [gap audit](docs/GAP_AUDIT.md)             |
+| Move the ledger to PostgreSQL/Supabase         | [PostgreSQL migration status](docs/POSTGRES_MIGRATION.md)                            |
 
 ### Preview
 
