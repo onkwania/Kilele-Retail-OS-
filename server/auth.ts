@@ -1,4 +1,4 @@
-import type { Request, Response, NextFunction, Express } from 'express';
+import type { Request, Response, NextFunction, Express, CookieOptions } from 'express';
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { rateLimit } from 'express-rate-limit';
 import { z } from 'zod';
@@ -33,13 +33,11 @@ export function protect(permission?: string) {
     next();
   };
 }
-export function installAuth(
-  app: Express,
-  db: DB,
-  options: { preview: boolean; production: boolean; origin?: string },
-) {
-  // Isolated embedded previews need a secure partitioned cookie; production remains first-party SameSite=Strict.
-  const cookieOptions = {
+/** Cookie policy for an authenticated session. Isolated embedded previews need a secure partitioned
+ * cookie; production remains first-party SameSite=Strict. */
+export type SessionCookie = CookieOptions;
+export function sessionCookieOptions(options: { preview: boolean; production: boolean }): SessionCookie {
+  return {
     httpOnly: true,
     secure: options.production || options.preview,
     sameSite: options.preview ? ('none' as const) : ('strict' as const),
@@ -47,25 +45,43 @@ export function installAuth(
     path: '/',
     maxAge: 12 * 3600_000,
   };
+}
+/** Issue one 12-hour session for an already-authenticated user. Shared by password sign-in, password
+ * change and invitation acceptance so every entry point enforces identical session hygiene. */
+export function issueSession(
+  db: DB,
+  req: Request,
+  res: Response,
+  userId: string,
+  cookieOptions: SessionCookie,
+) {
+  db.prepare('DELETE FROM auth_sessions WHERE expires_at<=?').run(now());
+  db.prepare('DELETE FROM login_attempts WHERE updated_at<?').run(
+    new Date(Date.now() - 30 * 86400000).toISOString(),
+  );
+  if (req.sessionHash) db.prepare('DELETE FROM auth_sessions WHERE token_hash=?').run(req.sessionHash);
+  const token = randomBytes(32).toString('hex'),
+    csrf = randomBytes(32).toString('hex');
+  db.prepare('INSERT INTO auth_sessions VALUES(?,?,?,?,?,?,?)').run(
+    sha(token),
+    userId,
+    csrf,
+    new Date(Date.now() + 12 * 3600_000).toISOString(),
+    now(),
+    req.ip ?? '',
+    String(req.headers['user-agent'] ?? '').slice(0, 300),
+  );
+  res.cookie('kilele_session', token, cookieOptions);
+  return csrf;
+}
+export function installAuth(
+  app: Express,
+  db: DB,
+  options: { preview: boolean; production: boolean; origin?: string },
+) {
+  const cookieOptions = sessionCookieOptions(options);
   function newSession(req: Request, res: Response, userId: string) {
-    db.prepare('DELETE FROM auth_sessions WHERE expires_at<=?').run(now());
-    db.prepare('DELETE FROM login_attempts WHERE updated_at<?').run(
-      new Date(Date.now() - 30 * 86400000).toISOString(),
-    );
-    if (req.sessionHash) db.prepare('DELETE FROM auth_sessions WHERE token_hash=?').run(req.sessionHash);
-    const token = randomBytes(32).toString('hex'),
-      csrf = randomBytes(32).toString('hex');
-    db.prepare('INSERT INTO auth_sessions VALUES(?,?,?,?,?,?,?)').run(
-      sha(token),
-      userId,
-      csrf,
-      new Date(Date.now() + 12 * 3600_000).toISOString(),
-      now(),
-      req.ip ?? '',
-      String(req.headers['user-agent'] ?? '').slice(0, 300),
-    );
-    res.cookie('kilele_session', token, cookieOptions);
-    return csrf;
+    return issueSession(db, req, res, userId, cookieOptions);
   }
   app.use('/api', (req, _res, next) => {
     const token = req.cookies?.kilele_session;

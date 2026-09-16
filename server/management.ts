@@ -32,7 +32,15 @@ const userSchema = z.object({
   reports_access: z.boolean().optional(),
   reason: reasonInput,
 });
-export function saveUser(db: DB, a: Actor, input: unknown, userId?: string) {
+/** Create or update a staff account. `origin` records HOW the account came to exist: an administrator
+ * typing a temporary password, or an invited person choosing their own. */
+export function saveUser(
+  db: DB,
+  a: Actor,
+  input: unknown,
+  userId?: string,
+  origin: 'administrator' | 'invitation' = 'administrator',
+) {
   demand(a, 'staff.write');
   const schema = userId
     ? userSchema.strict()
@@ -119,7 +127,8 @@ export function saveUser(db: DB, a: Actor, input: unknown, userId?: string) {
       ...row,
       reports_access: b.reports_access,
       effective_permissions: actorFor(db, rid)?.permissions ?? [],
-      temporary_password: !original,
+      created_via: original ? undefined : origin,
+      temporary_password: !original && origin !== 'invitation',
     },
     b.reason,
   );

@@ -113,6 +113,16 @@ Revenue excludes configured output tax; COGS comes from sale snapshots. Refunds 
 
 Inventory reports reconstruct historical closing quantity/value from movements. Operational staff metrics are for contextual human review, **never automatic accusations of theft or misconduct**.
 
+### Giving somebody access
+
+In **Staff & access**, choose **Invite team member**. Enter their name, email and what they will do — the role list explains itself in plain terms (Cashier and Inventory Staff are employees, Administrator is a supervisor, Staff Accountant handles finance, Super Admin is your own level). You then get a private link, shown **once**: copy it, or open it in your own mail app with the message already written, and send it to that person. They open it, choose their own password and land in the workspace with exactly the role you picked. You never see or set their password.
+
+The link works once and expires after seven days. Send it only to the person you intended — anyone holding it can create that account. **Withdraw** stops a link immediately, and **Send a new link** replaces an old one (the previous link dies at the same moment). Invitations and every acceptance are recorded in the audit trail.
+
+Only your Super Admin role can invite an Administrator or a second Super Admin. If you are standing next to the person instead, **Add team member with a password** still works; they must replace that temporary password at first sign-in.
+
+Kilele does not send the email for you: no mail provider is configured, so delivery is yours.
+
 Audit entries, price history and posted ledger rows have no normal delete/edit controls. The application’s audit verification detects chain inconsistency; trusted filesystem/database administrators remain outside the application’s permission boundary.
 
 ## Receiving errors without invented invoice numbers

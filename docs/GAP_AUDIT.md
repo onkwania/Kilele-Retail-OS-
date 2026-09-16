@@ -1,9 +1,15 @@
 # Third-pass gap audit — 6 September 2026
 
 A read-only audit of the repository as checked out at `75ddfc0`, followed by closure of the gaps that
-are owned by this codebase. This pass **extends** the existing implementation; it does not replace the
-POS, ledger, inventory, approval, reporting or recovery architecture audited in
-[SECOND_PASS_AUDIT.md](SECOND_PASS_AUDIT.md).
+are owned by this codebase.
+
+> **Dated third-pass record.** The counts below (106 tests / 20 files / nine browser scenarios) are the
+> ones executed on 2026-09-06 and are left as written. The suite has since grown to 115 tests across 21
+> files with ten browser scenarios — see the
+> [16 September checkpoint in IMPLEMENTATION.md](IMPLEMENTATION.md) for the staff-invitation capability
+> added after this pass. This pass **extends** the existing implementation; it does not replace the
+> POS, ledger, inventory, approval, reporting or recovery architecture audited in
+> [SECOND_PASS_AUDIT.md](SECOND_PASS_AUDIT.md).
 
 ## Method
 

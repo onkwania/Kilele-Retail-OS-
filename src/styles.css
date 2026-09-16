@@ -845,6 +845,8 @@ button::-moz-focus-inner {
 .header-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 10px;
 }
 .today-label {
@@ -2847,6 +2849,71 @@ button::-moz-focus-inner {
 .login-form-side > footer i {
   font-style: normal;
   margin: 0 8px;
+}
+/* An invitation link is opened by somebody with no account yet: one purpose, no workspace chrome. */
+.login-page.solo {
+  grid-template-columns: minmax(0, 1fr);
+  background: var(--surface);
+}
+.login-page.solo .login-form-side {
+  padding: 46px 20px;
+}
+.login-page.solo .login-form-card {
+  width: 430px;
+  padding: 30px 30px 22px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: 0 26px 50px -36px rgba(32, 62, 46, 0.55);
+}
+.invite-summary {
+  display: grid;
+  gap: 9px;
+  padding: 14px 16px;
+  margin-bottom: 22px;
+  background: var(--sage);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+.invite-summary > div {
+  display: flex;
+  gap: 14px;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 12px;
+}
+.invite-summary small {
+  color: var(--muted);
+  flex: none;
+}
+.invite-summary strong {
+  font-weight: 600;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.invite-link {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.invite-link .input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+.invite-link .btn {
+  flex: none;
+  width: auto;
+  margin-top: 0;
+}
+.invite-footer {
+  display: flex;
+  justify-content: center;
+  margin-top: 26px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+.invite-footer .logo {
+  transform: scale(0.82);
 }
 .boot {
   height: 100vh;

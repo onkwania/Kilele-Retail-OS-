@@ -18,9 +18,21 @@ New passwords use salted, versioned scrypt (N=131072, r=8, p=1). Legacy hashes a
 | Cashier          | Own-session POS, own sales/receipts/closing, catalogue without buying costs, own requests               |
 | Inventory Staff  | Catalogue, stock, receiving, supplier view, stock requests and inventory/purchase reports               |
 
-Every route and mutation enforces server-side permissions and business/branch scope. Accountants cannot manage staff, settings, audit or prices directly. Their financial-report permission can be explicitly disabled. No role can approve its own request. New staff must change temporary passwords. Changing access revokes existing sessions, including a current self-edit session.
+Every route and mutation enforces server-side permissions and business/branch scope. Accountants cannot manage staff, settings, audit or prices directly. Their financial-report permission can be explicitly disabled. No role can approve its own request. Staff accounts an administrator opens directly must change their temporary password before continuing; accounts created from an invitation already carry a password the person chose themselves. Changing access revokes existing sessions, including a current self-edit session.
 
 The current client is a single-branch workspace. Cross-tenant and role-denial tests protect the branch-ready architecture; they are not a claim of delivered multi-tenant provisioning UI or multi-site HA.
+
+## Staff invitations
+
+An administrator can appoint a supervisor or an employee **without ever handling that person's password**. `user_invites` stores the name, email, role, inviter, reason and expiry of a _pending promise_; the `users` row is created only when the invitation is redeemed, so an outstanding invitation is never a half-provisioned account.
+
+The bearer token is 256-bit random, is returned exactly once in the creating response, and is stored only as a SHA-256 hash. Neither a copy of the database nor the audit trail therefore yields a usable link, and the token is deliberately absent from every audit payload.
+
+`GET /api/invites`, `POST /api/invites` and `POST /api/invites/:id/revoke` require `staff.read` / `staff.write` and are business- and branch-scoped. `GET /api/public/invite/:token` and `POST /api/public/invite/:token/accept` are the only unauthenticated staff endpoints. Both are rate-limited to 12 requests per 15 minutes and disclose nothing beyond the name, email, role, business and branch already written on the invitation.
+
+Authority is re-checked at redemption against the inviter's **current** role and active flag: an administrator who is demoted or deactivated after sending an invitation cannot have it honoured, and only a super administrator's invitation can ever mint an administrator. The invitation's terms (name, email, role, token, inviter, expiry, reason) are immutable by trigger, it is bound to the branch that issued it, and a closed invitation can never change state again or be deleted. Redemption is one immediate transaction that creates the user, clears `must_change_password` and closes the invitation, so a token can never mint two accounts. Inviting an address that already holds an account is refused, and re-inviting withdraws the previous pending link for that email.
+
+Kilele sends no email — no mail provider is configured. The interface shows the link once with a copy control and a `mailto:` draft, so delivery through the administrator's own mail app, WhatsApp or SMS is their responsibility. Automated delivery would be a separate integration with its own credentials and is **not** implemented.
 
 ## Exact financial and inventory posting
 

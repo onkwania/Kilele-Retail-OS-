@@ -46,3 +46,17 @@ Browser output and failure traces are generated under `test-results/` and `playw
 Final chained verification completed at **2026-09-05 13:10:35 UTC / 16:10:35 EAT**: 55 tests across 11 files, five browser scenarios, typecheck, lint, production build, formatting and runtime dependency audit all passed. The main preview's integrity check passed with 16 audit events, and its database/WAL permissions were 0600. The production client was 462.88 kB JavaScript (133.43 kB gzip) and 79.24 kB CSS (16.42 kB gzip), with self-hosted fonts.
 
 The immediately preceding data inspection confirmed 140 products, zero configured buying/selling prices, zero stock, and no sales, expenses or purchases in the main preview. CLI backup/restore round-trips used separate test databases; test financial entries were never copied into the evaluation workspace.
+
+## Checkpoint — 16 September 2026 (invitation-based staff provisioning)
+
+The figures above are the 5 September record and are left exactly as written. Re-executed in this workspace on 2026-09-16 after adding staff invitations:
+
+- `npm run test` — **115 tests across 21 files**, all passing (includes the new `tests/invites.test.ts`, 9 cases).
+- `npm run typecheck`, `npm run lint`, `npm run format:check`, `npm run build`, `npm run check:pages` — all exit 0.
+- `npm run db:check` — `{"ok": true, "errors": []}` against the running preview database.
+- `npm audit --omit=dev` — **0 vulnerabilities**; no runtime dependency was added.
+- Production client: **497.25 kB JavaScript (143.37 kB gzip)** and **84.87 kB CSS (17.58 kB gzip)**, self-hosted fonts. The 462.88 kB / 79.24 kB figures above belong to the earlier checkpoint.
+
+The invitation flow was also driven over HTTP against the live preview workspace: an invitation was issued, previewed anonymously, redeemed anonymously, replayed (refused `410`), and the resulting account then signed in normally with the password its holder chose. The preview database retains that demonstration account.
+
+`npm run test:e2e` — now **ten** real-browser scenarios, the newest covering invite → accept → denied administrator escalation → withdraw → dead link — was **not executed in this sandbox**, because Chromium cannot be downloaded here. It is executed by [CI](../.github/workflows/ci.yml) on every push and pull request. Nothing in this checkpoint closes E01 (KRA eTIMS/fiscal), E02 (real payment-provider settlement) or E03 (hardware, host/TLS rollout, off-site backup and witnessed restore drill), and no email-delivery capability is claimed: Kilele still does not send mail.

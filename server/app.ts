@@ -21,6 +21,7 @@ import {
   demand,
 } from './core.js';
 import { installManagement } from './management.js';
+import { installInvites } from './invites.js';
 import { installReports } from './reports.js';
 import { installAnalytics } from './analytics.js';
 import { installApprovals } from './approvals.js';
@@ -199,6 +200,10 @@ export function createApp(db: DB, options: AppOptions = {}) {
   installAnalytics(app, db);
   installReports(app, db);
   installManagement(app, db);
+  installInvites(app, db, {
+    preview: options.preview ?? false,
+    production: options.production ?? false,
+  });
   // DOMAIN_ROUTES
   app.use('/api', (_req, res) => res.status(404).json({ error: 'Endpoint not found.' }));
   app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

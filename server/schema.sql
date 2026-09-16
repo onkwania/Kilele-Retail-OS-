@@ -35,6 +35,19 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
 CREATE TABLE IF NOT EXISTS login_attempts (
  email TEXT PRIMARY KEY, failures INTEGER NOT NULL DEFAULT 0, locked_until TEXT, updated_at TEXT NOT NULL
 );
+-- Staff invitations. The bearer token itself is never stored; only its SHA-256 hash is.
+-- An invitation is a pending promise, not an account: the user row is created when it is accepted.
+CREATE TABLE IF NOT EXISTS user_invites (
+ id TEXT PRIMARY KEY, business_id TEXT NOT NULL REFERENCES businesses(id), branch_id TEXT NOT NULL,
+ name TEXT NOT NULL, email TEXT NOT NULL COLLATE NOCASE, role_id TEXT NOT NULL REFERENCES roles(id),
+ reports_access INTEGER CHECK(reports_access IN (0,1)),
+ token_hash TEXT NOT NULL UNIQUE,
+ status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','accepted','revoked','expired')),
+ invited_by TEXT NOT NULL REFERENCES users(id), reason TEXT NOT NULL,
+ created_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+ closed_at TEXT, closed_reason TEXT NOT NULL DEFAULT '', accepted_user_id TEXT REFERENCES users(id),
+ FOREIGN KEY(branch_id,business_id) REFERENCES branches(id,business_id), UNIQUE(id,business_id,branch_id)
+);
 CREATE TABLE IF NOT EXISTS categories (
  id TEXT PRIMARY KEY, business_id TEXT NOT NULL REFERENCES businesses(id), name TEXT NOT NULL,
  color TEXT NOT NULL DEFAULT '#527762', UNIQUE(business_id,name), UNIQUE(id,business_id)
@@ -278,6 +291,8 @@ CREATE INDEX IF NOT EXISTS idx_payments_session ON payments(session_id,method);
 CREATE INDEX IF NOT EXISTS idx_audit_scope ON audit_logs(business_id,branch_id,created_at);
 CREATE INDEX IF NOT EXISTS idx_purchases_scope ON purchases(business_id,branch_id,created_at);
 CREATE INDEX IF NOT EXISTS idx_journal_scope ON journal_lines(business_id,branch_id,account);
+CREATE INDEX IF NOT EXISTS idx_invites_scope ON user_invites(business_id,branch_id,status,created_at);
+CREATE INDEX IF NOT EXISTS idx_invites_email ON user_invites(business_id,email,status);
 CREATE TRIGGER IF NOT EXISTS inventory_only_from_ledger BEFORE UPDATE ON inventory
 WHEN NOT EXISTS (SELECT 1 FROM inventory_movements m WHERE m.business_id=NEW.business_id AND m.branch_id=NEW.branch_id AND m.product_id=NEW.product_id AND m.previous_qty=OLD.quantity AND m.new_qty=NEW.quantity AND m.previous_value_cents=OLD.value_cents AND m.new_value_cents=NEW.value_cents AND m.rowid=(SELECT MAX(rowid) FROM inventory_movements WHERE business_id=NEW.business_id AND branch_id=NEW.branch_id AND product_id=NEW.product_id))
 BEGIN SELECT RAISE(ABORT,'Inventory updates require a matching ledger movement'); END;
@@ -294,6 +309,12 @@ CREATE TRIGGER IF NOT EXISTS cash_session_preserve BEFORE UPDATE ON cash_session
 WHEN OLD.closed_at IS NOT NULL OR NEW.id<>OLD.id OR NEW.business_id<>OLD.business_id OR NEW.branch_id<>OLD.branch_id OR NEW.user_id<>OLD.user_id OR NEW.register<>OLD.register OR NEW.opening_cents<>OLD.opening_cents OR NEW.opened_at<>OLD.opened_at OR NEW.closed_at IS NULL
 BEGIN SELECT RAISE(ABORT,'Only closing a live session is allowed'); END;
 CREATE TRIGGER IF NOT EXISTS cash_session_no_delete BEFORE DELETE ON cash_sessions BEGIN SELECT RAISE(ABORT,'Sessions cannot be deleted'); END;
+CREATE TRIGGER IF NOT EXISTS invite_preserve_terms BEFORE UPDATE ON user_invites
+WHEN NEW.id<>OLD.id OR NEW.business_id<>OLD.business_id OR NEW.branch_id<>OLD.branch_id OR NEW.name<>OLD.name OR NEW.email<>OLD.email OR NEW.role_id<>OLD.role_id OR NEW.token_hash<>OLD.token_hash OR NEW.invited_by<>OLD.invited_by OR NEW.created_at<>OLD.created_at OR NEW.expires_at<>OLD.expires_at OR NEW.reason<>OLD.reason OR NEW.reports_access IS NOT OLD.reports_access
+BEGIN SELECT RAISE(ABORT,'Invitation terms are immutable; revoke and invite again'); END;
+CREATE TRIGGER IF NOT EXISTS invite_no_terminal_update BEFORE UPDATE ON user_invites WHEN OLD.status<>'pending'
+BEGIN SELECT RAISE(ABORT,'A closed invitation cannot change state'); END;
+CREATE TRIGGER IF NOT EXISTS invite_no_delete BEFORE DELETE ON user_invites BEGIN SELECT RAISE(ABORT,'Invitations cannot be deleted'); END;
 CREATE TABLE IF NOT EXISTS purchase_reversals (
  id TEXT PRIMARY KEY, ref TEXT NOT NULL UNIQUE, business_id TEXT NOT NULL, branch_id TEXT NOT NULL,
  purchase_id TEXT NOT NULL UNIQUE, approval_id TEXT NOT NULL UNIQUE REFERENCES approval_requests(id),

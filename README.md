@@ -6,7 +6,7 @@ A working, production-oriented retail POS and business-management application fo
 
 ## Audit status
 
-The existing architecture was audited and extended, not rebuilt. See the [third-pass gap audit](docs/GAP_AUDIT.md), the [second-pass audit/final status](docs/SECOND_PASS_AUDIT.md), the [181-row requirement matrix](docs/REQUIREMENTS_MATRIX.md) and [execution evidence](docs/SECOND_PASS_VERIFICATION.json). The suite currently contains **106 automated tests across 20 files and nine real-browser scenarios**, and every push and pull request is verified by [continuous integration](.github/workflows/ci.yml) rather than by manual discipline alone. External fiscal, provider, hardware and host acceptance gates remain open; this is **not an unconditional production go-live declaration**.
+The existing architecture was audited and extended, not rebuilt. See the [third-pass gap audit](docs/GAP_AUDIT.md), the [second-pass audit/final status](docs/SECOND_PASS_AUDIT.md), the [181-row requirement matrix](docs/REQUIREMENTS_MATRIX.md) and [execution evidence](docs/SECOND_PASS_VERIFICATION.json). The suite currently contains **115 automated tests across 21 files and ten real-browser scenarios**, and every push and pull request is verified by [continuous integration](.github/workflows/ci.yml) rather than by manual discipline alone. External fiscal, provider, hardware and host acceptance gates remain open; this is **not an unconditional production go-live declaration**.
 
 ## Cloudflare Pages deployment
 
@@ -61,7 +61,7 @@ The browser suite needs Chromium’s system libraries and `openssl` for local, e
 - Supplier credit and actual-reference settlements; independently reviewed receiving replacements; expenses with private evidence; optional manually confirmed recoverable input-VAT amounts; register sessions and reviewed daily closing.
 - Independent approval, rejection or clarification. Posted originals stay intact; corrections append linked reversals/adjustments and review events.
 - Date-filtered dashboard and financial/operational analytics, plus **10 CSV/PDF reports**: sales, profit, inventory, expenses, purchases, staff, approvals, audit, payments and journal.
-- Five server-enforced roles, temporary-password rotation, private uploads, immutable price/audit histories and ledger-integrity checks.
+- Five server-enforced roles and **single-use invitation links**, so an administrator can appoint a supervisor or an employee who then creates their own account and chooses their own password. Accounts opened directly with a temporary password still require rotation at first sign-in. Private uploads, immutable price/audit histories and ledger-integrity checks throughout.
 - Consistent online backups, checksum manifests, fresh-path restore and a read-only recommendations data boundary.
 
 ## Important boundaries

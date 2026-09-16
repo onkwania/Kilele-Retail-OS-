@@ -816,3 +816,121 @@ test('deployment routing failure is visible and cannot masquerade as a working l
   await page.getByRole('button', { name: 'Retry connection' }).click();
   await expect(page.getByLabel(/^Email address/)).toBeVisible();
 });
+
+test('administrator invites a supervisor by link, who then creates their own account and cannot escalate', async ({
+  page,
+  browser,
+}) => {
+  await ready(page, '/staff', 'Staff & access');
+  await page.getByRole('button', { name: 'Invite team member' }).click();
+  await dialog(page)
+    .getByLabel(/^Full name/)
+    .fill('Qa Supervisor');
+  await dialog(page)
+    .getByLabel(/^Email address/)
+    .fill('qa.supervisor@example.test');
+  await dialog(page)
+    .getByLabel(/^What will they do/)
+    .selectOption('admin');
+  await expect(dialog(page).getByText(/Supervisor — approves corrections/)).toBeVisible();
+  await dialog(page)
+    .getByLabel(/^Why are you inviting/)
+    .fill('Acceptance test for invitation-based provisioning');
+  await dialog(page).getByRole('button', { name: 'Create invitation link' }).click();
+  await expect(
+    dialog(page).getByRole('heading', { name: /Invitation ready for Qa Supervisor/ }),
+  ).toBeVisible();
+  const link = await dialog(page).locator('#invite-link').inputValue();
+  const token = link.split('/invite/')[1];
+  expect(token, `invitation token in ${link}`).toMatch(/^[A-Za-z0-9_-]{43}$/);
+  await dialog(page).getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(page.getByRole('cell', { name: 'Awaiting acceptance' })).toBeVisible();
+  // Nobody has been created yet: an invitation is a promise, not an account.
+  expect((await json(page, '/staff')).users.map((u: any) => u.email)).not.toContain(
+    'qa.supervisor@example.test',
+  );
+
+  // The invited person arrives with no session at all, exactly like a real newcomer.
+  const context = await browser.newContext({ baseURL: 'http://127.0.0.1:4173' }),
+    invitee = await context.newPage();
+  await invitee.addInitScript(() => sessionStorage.setItem('kilele-signed-out', '1'));
+  await invitee.goto(`/invite/${token}`);
+  await expect(invitee.getByRole('heading', { name: 'Create your account.', exact: true })).toBeVisible();
+  await expect(invitee.getByText('qa.supervisor@example.test')).toBeVisible();
+  await expect(invitee.getByText('Administrator', { exact: true })).toBeVisible();
+  await expect(invitee.getByText(/You are signed in as/)).toHaveCount(0);
+  await invitee.getByLabel(/^Choose a password/).fill('qa-invitee-chosen-passphrase');
+  await invitee.getByLabel(/^Confirm password/).fill('a-mistyped-passphrase');
+  await invitee.getByRole('button', { name: 'Create my account' }).click();
+  await expect(invitee.getByText(/two passwords do not match/i)).toBeVisible();
+  await invitee.getByLabel(/^Confirm password/).fill('qa-invitee-chosen-passphrase');
+  await invitee.getByRole('button', { name: 'Create my account' }).click();
+  await expect(invitee.getByRole('heading', { name: 'You’re on the team.', exact: true })).toBeVisible();
+  await invitee.getByRole('button', { name: 'Enter your workspace' }).click();
+  await expect(invitee.getByRole('heading', { name: 'Business overview', exact: true })).toBeVisible();
+  const me = await json(invitee, '/auth/me');
+  expect(me.user.role_id).toBe('admin');
+  expect(me.user.email).toBe('qa.supervisor@example.test');
+  // They chose their own password, so no temporary-password gate is imposed.
+  expect(me.user.must_change_password).toBe(0);
+  // A supervisor can invite employees but never an administrator.
+  const escalation = await invitee.evaluate(async () => {
+    const session = await (await fetch('/api/auth/me', { credentials: 'same-origin' })).json();
+    const response = await fetch('/api/invites', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': session.csrf },
+      body: JSON.stringify({
+        name: 'Qa Escalation',
+        email: 'qa.escalation@example.test',
+        role_id: 'super_admin',
+        reason: 'Escalation attempt during acceptance testing',
+      }),
+    });
+    return { status: response.status, error: (await response.json()).error ?? '' };
+  });
+  expect(escalation.status).toBe(403);
+  expect(escalation.error).toMatch(/super administrator/i);
+
+  // The administrator sees the invitation close and the person appear in the team.
+  await ready(page, '/staff', 'Staff & access');
+  await expect(page.getByRole('cell', { name: 'Account created' })).toBeVisible();
+  const teamRow = page.locator('tr', { hasText: 'qa.supervisor@example.test' }).first();
+  await expect(teamRow).toContainText('Administrator');
+  expect((await json(page, '/staff')).users.map((u: any) => u.email)).toContain('qa.supervisor@example.test');
+
+  // A withdrawn invitation is dead for everybody, including its original holder.
+  await page.getByRole('button', { name: 'Invite team member' }).click();
+  await dialog(page)
+    .getByLabel(/^Full name/)
+    .fill('Qa Withdrawn');
+  await dialog(page)
+    .getByLabel(/^Email address/)
+    .fill('qa.withdrawn@example.test');
+  await dialog(page)
+    .getByLabel(/^What will they do/)
+    .selectOption('cashier');
+  await dialog(page)
+    .getByLabel(/^Why are you inviting/)
+    .fill('Acceptance test for withdrawing an invitation');
+  await dialog(page).getByRole('button', { name: 'Create invitation link' }).click();
+  const second = (await dialog(page).locator('#invite-link').inputValue()).split('/invite/')[1];
+  await dialog(page).getByRole('button', { name: 'Close', exact: true }).click();
+  const pendingRow = page.locator('tr', { hasText: 'qa.withdrawn@example.test' }).first();
+  await pendingRow.getByRole('button', { name: 'Withdraw' }).click();
+  await dialog(page)
+    .getByLabel(/^Reason/)
+    .fill('The evening shift no longer needs this role');
+  await dialog(page).getByRole('button', { name: 'Withdraw invitation' }).click();
+  await expect(page.getByRole('cell', { name: 'Withdrawn' })).toBeVisible();
+  await invitee.goto(`/invite/${second}`);
+  await expect(
+    invitee.getByRole('heading', { name: 'This link cannot be used.', exact: true }),
+  ).toBeVisible();
+  await expect(invitee.getByText(/withdrawn by your administrator/i)).toBeVisible();
+  expect((await json(page, '/staff')).users.map((u: any) => u.email)).not.toContain(
+    'qa.withdrawn@example.test',
+  );
+  expect((await json(page, '/integrity')).ok).toBe(true);
+  await context.close();
+});
