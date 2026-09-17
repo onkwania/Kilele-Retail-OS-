@@ -21,7 +21,7 @@
     "db:pg:protections": "tsx server/postgres/cli.ts protections",
     "db:pg:check": "tsx server/postgres/cli.ts check",
     "db:pg:bootstrap": "tsx server/postgres/cli.ts bootstrap",
-    "db:pg:test": "vitest run tests/postgres-schema.test.ts",
+    "db:pg:test": "vitest run tests/postgres-schema.test.ts tests/postgres-slice1-health.test.ts tests/postgres-engine-guard.test.ts",
     "bootstrap": "tsx server/bootstrap.ts",
     "backup": "tsx server/backup.ts",
     "restore": "tsx server/restore.ts",

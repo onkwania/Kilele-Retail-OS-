@@ -125,6 +125,32 @@ jobs:
       - name: Behavioural trigger, transaction and ledger-check suite
         run: npm run db:pg:test
 
+      # Slice 1 evidence at the process level: the PostgreSQL API boots only after the migrations
+      # and the guard triggers are verified, answers health, and refuses every unconverted route.
+      - name: PostgreSQL API boots and fails closed on unconverted routes
+        run: |
+          # tsx, not dist: this job does not build the client, and the API must boot from source.
+          DATABASE_ENGINE=postgres PORT=3999 npx tsx server/index.ts > /tmp/pg-server.log 2>&1 &
+          SERVER_PID=$!
+          for _ in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:3999/api/health > /tmp/pg-health.json 2>/dev/null && break
+            sleep 0.5
+          done
+          # An unconverted route must refuse loudly, never answer 404 or an empty success.
+          curl -s -o /tmp/pg-sales.json -w '%{http_code}' http://127.0.0.1:3999/api/sales > /tmp/pg-sales.code || true
+          # npx spawns node as a child; kill both so the runner does not carry a live listener.
+          pkill -P "$SERVER_PID" 2>/dev/null || true
+          kill "$SERVER_PID" 2>/dev/null || true
+          sleep 1
+          cat /tmp/pg-server.log
+          grep -q 'guard triggers verified' /tmp/pg-server.log
+          grep -q '"database":"available"' /tmp/pg-health.json
+          grep -q '"engine":"postgres"' /tmp/pg-health.json
+          [ "$(cat /tmp/pg-sales.code)" = "503" ]
+          grep -q '"code":"NOT_MIGRATED"' /tmp/pg-sales.json
+          # The PostgreSQL engine must not open or create a SQLite ledger file.
+          test -z "$(ls data/*.sqlite data/*.sqlite-wal data/*.sqlite-shm 2>/dev/null)"
+
       - name: Ledger integrity report
         run: npm run db:pg:check
 

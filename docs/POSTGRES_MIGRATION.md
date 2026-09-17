@@ -9,18 +9,25 @@
 | Phase 3 — schema conversion as versioned migrations                                                                  | **Done, verified against PostgreSQL 18.4**  | `server/postgres/migrations/001_initial_schema.sql`                                                         |
 | Phase 4 — financial protection triggers                                                                              | **Done, verified behaviourally (39 tests)** | `server/postgres/migrations/002_integrity_triggers.sql`, `003_indexes.sql`, `tests/postgres-schema.test.ts` |
 | Migration runner, protection verifier, ledger checker, bootstrap, operator CLI                                       | **Done**                                    | `server/postgres/{migrate,integrity,check,bootstrap,audit,cli}.ts`                                          |
-| Phase 5 — Slices 1–9: converting the ~20 Express modules from synchronous SQLite to the async layer                  | **Not started**                             | see [Remaining work](#remaining-work)                                                                       |
+| Phase 5 — Slice 1: health, connection diagnostics, fail-closed routing, startup sequence                             | **Done, verified on PostgreSQL 18.4**       | `server/postgres/{slices,app,server}.ts`, `server/app-shared.ts`, `tests/postgres-slice1-health.test.ts`    |
+| Phase 5 — Slices 2–9: converting the ~20 Express modules from synchronous SQLite to the async layer                  | **In progress — 1 of 9 done**               | see [Remaining work](#remaining-work)                                                                       |
 | Phase 6 — backup/restore/check utilities on PostgreSQL (`pg_dump`, PITR, restore drill), SQLite→PostgreSQL data copy | **Not started**                             | `server/backup-engine.ts` and `server/restore.ts` are still SQLite-only                                     |
 | Phase 7 — invitation-based staff provisioning                                                                        | **Already shipped, earlier, on SQLite**     | commit `f9272ee`, `server/invites.ts`, `tests/invites.test.ts`                                              |
 | Phase 8 — SaaS/platform tables (`platform_accounts`, `plans`, `subscriptions`, …)                                    | **Not started**                             | none of those tables exist in either schema                                                                 |
 
-**Consequence, stated plainly:** `DATABASE_ENGINE=postgres` **refuses to start the API today**. The
-database layer is finished and proven; the Express modules that use it are not converted yet. The
-guard exists so that a deployment can never claim to be on PostgreSQL while silently serving the
-SQLite file. See [Engine guard](#engine-guard).
+**Consequence, stated plainly:** `DATABASE_ENGINE=postgres` now **starts a real API server**, but it
+serves only two routes — `GET /api/health` and `GET /api/engine`. **Every other `/api` route answers
+`503 NOT_MIGRATED`**, naming the route and listing which slices are converted, so a deployment can
+never claim to be on PostgreSQL while silently serving the SQLite ledger, and no client can mistake
+an unconverted endpoint for a successful empty result. The database layer is finished and proven;
+the ~20 Express modules that use it are being converted one vertical slice at a time. Startup order
+is verify connection → apply or verify migrations → prove the financial protections → listen; if any
+step fails the process exits with an operator-readable diagnosis instead of half-booting.
+See [Engine guard](#engine-guard) and [Slice 1](#slice-1--health-connection-startup).
 
 Nothing in this work changes the running product. The default engine is still `sqlite`, the demo
-deployment is untouched, and all 132 existing tests still pass unchanged.
+deployment is untouched, all 132 existing SQLite tests still pass unchanged, and 74 PostgreSQL tests
+pass on top of them when `DATABASE_URL` is set (189 in total).
 
 ---
 
@@ -56,14 +63,21 @@ server/postgres/
 ├── audit.ts         append-only audit writer with a hash chain + actorFor()
 ├── bootstrap.ts     idempotent initialise + one-time workspace creation
 ├── cli.ts           ping | migrate | status | protections | check | bootstrap
+├── slices.ts        the slice registry: what is converted, what is not, and its scope
+├── app.ts           the PostgreSQL Express app: health, engine status, 503 NOT_MIGRATED
+├── server.ts        Slice 1 startup: verify → migrate → prove protections → listen
 └── migrations/
     ├── 001_initial_schema.sql        47 tables in foreign-key dependency order
     ├── 002_integrity_triggers.sql    65 triggers: every guard the SQLite ledger enforces
     └── 003_indexes.sql               the 19 real indexes + 4 documented additions
 server/passwords.ts   scrypt hashing extracted from db.ts so the PostgreSQL path never
                       imports better-sqlite3 (db.ts re-exports it; no call site changed)
+server/app-shared.ts  security headers, body limits, rate limit, the single error contract and
+                      constraint-error mapping, shared byte-for-byte by both engines
 tests/postgres-schema.test.ts        39 behavioural tests against a real server
 tests/postgres-engine-guard.test.ts  17 tests that need no server (run everywhere)
+tests/postgres-slice1-health.test.ts 18 tests over real HTTP: health, headers, fail-closed routing,
+                                     startup diagnostics, boot-and-shutdown on an ephemeral port
 ```
 
 Operator commands:
@@ -110,6 +124,14 @@ imitation:
   - `SUM(total_cents)` returns a JavaScript **number**, not a string
   - the integrity checker detects five kinds of tampering (inventory drift, sale header vs items,
     tendered cash, unbalanced journal, tampered audit row) and a dropped trigger
+- **Slice 1**, over real HTTP against that same server: `/api/health` answers 200 with the same
+  security headers the SQLite app sets, 503 when the database is unreachable, `/api/engine` reports
+  the converted and pending slices, six representative unconverted routes (and one that never
+  existed) all answer `503 NOT_MIGRATED`, the app refuses to build while the engine is `sqlite`, the
+  production/preview validation matches the SQLite app, a wrong password is named without echoing
+  the secret, and a full boot on an ephemeral port verifies **65 guard triggers** while creating
+  **no** SQLite file. `DATABASE_AUTO_MIGRATE=false` refuses to start with _missing 3 migration(s)_
+  and names the release command; `true` applies 001/002/003 on an empty schema.
 - CI reproduces this on every push: job `postgres` starts a `postgres:16` service container with
   `REQUIRE_POSTGRES_TESTS=1`, so a missing database **fails** the build instead of skipping.
 
@@ -168,12 +190,13 @@ above `Number.MAX_SAFE_INTEGER`. This is safe because the application already ca
 `server/db.ts createDb()` — the single choke point used by the API, bootstrap, check, backup,
 restore and catalogue update — calls `assertEngineUsable()` first:
 
-| Configuration                                        | Result                                                                           |
-| ---------------------------------------------------- | -------------------------------------------------------------------------------- |
-| unset / `sqlite`                                     | today's behaviour, unchanged                                                     |
-| `postgres`, no `DATABASE_URL`                        | startup fails: _requires DATABASE_URL_                                           |
-| `postgres` with `DATABASE_URL`, module not converted | startup fails: _refuses to start rather than silently serving the SQLite ledger_ |
-| `mysql`, or any other value                          | startup fails: _must be "sqlite" or "postgres"_                                  |
+| Configuration                                      | Result                                                                           |
+| -------------------------------------------------- | -------------------------------------------------------------------------------- |
+| unset / `sqlite`                                   | today's behaviour, unchanged                                                     |
+| `postgres`, no `DATABASE_URL`                      | startup fails: _requires DATABASE_URL_                                           |
+| `postgres` with `DATABASE_URL`, SQLite module used | startup fails: _refuses to start rather than silently serving the SQLite ledger_ |
+| `postgres`, HTTP route in an unconverted slice     | `503 NOT_MIGRATED` naming the route; never a 404, never an empty success         |
+| `mysql`, or any other value                        | startup fails: _must be "sqlite" or "postgres"_                                  |
 
 As each slice is converted, register it so the guard lets it through:
 
@@ -187,25 +210,85 @@ every CI job and on every laptop.
 
 ---
 
+## Slice 1 — health, connection, startup
+
+The first vertical slice is converted: `DATABASE_ENGINE=postgres` starts a real server, proves its
+connection, and answers nothing it cannot honour.
+
+**Startup order** (`server/postgres/server.ts`, each step fatal):
+
+1. `ping()` — one real round trip, so credentials, TLS, host, port and database name are all proven
+   before anything listens. Failures are translated into operator actions by
+   `explainConnectionFailure()`: SQLSTATE `28P01` names the password without echoing it, a
+   `pg_hba.conf … no encryption` message (also `28000`) points at `DATABASE_SSL=require` rather
+   than misdiagnosing TLS as bad credentials, `3D000` names the missing database, `ENOTFOUND` DNS,
+   `ECONNREFUSED` the port or the provider IP allow-list, `ETIMEDOUT`/`ECONNRESET` the network path.
+2. **Migrations** — applied from Git when `DATABASE_AUTO_MIGRATE` allows it (default `true` outside
+   production, `false` in production, where the release command migrates instead). With it off, a
+   schema missing migrations refuses to start and prints _missing 3 migration(s)_ plus the command
+   to run; a checksum change on an applied file is a hard error either way.
+3. **Protections** — `assertProtections()` requires all **65 guard triggers** (plus the tables,
+   foreign keys and indexes) to be present. A database that lost its immutability triggers is not a
+   Kilele ledger, so the process exits rather than serving it.
+4. **Listen** — only then. The banner states the PostgreSQL version, the database, the trigger
+   count and how many migrations this boot applied, and repeats that `DATABASE_PATH` is ignored: no
+   SQLite file is opened or created in this mode.
+
+**HTTP contract** (`server/postgres/app.ts`):
+
+| Route                   | Answers                                                                                                                                        |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/health`       | `200 {status:"ok",currency:"KES",database:"available",engine:"postgres"}` after a live round trip; `503 …database:"unreachable"` when it fails |
+| `GET /api/engine`       | `{engine:"postgres",migrated:[…],pending:[{slice,scope}…]}` — migration progress for operators                                                 |
+| any other `/api/...`    | `503 {code:"NOT_MIGRATED",route:"GET /api/…",migrated:[…],"error":"This operation is not available yet…"}`                                     |
+| anything outside `/api` | the built client when `serveClient` is on, otherwise Express's own 404                                                                         |
+
+`503 NOT_MIGRATED` is deliberate. An unconverted route must never answer `404` (which reads as "this
+feature does not exist") or an empty `200` (which reads as "there are no sales today"). Failing
+closed means a half-migrated deployment cannot look healthy while refusing to record money.
+
+**One HTTP contract for both engines** (`server/app-shared.ts`): helmet and CSP, a 4 MB JSON body
+limit, cookie parsing, 600 requests per 60 seconds per IP, `Cache-Control: no-store`, and the single
+error contract are extracted once and installed by both `server/app.ts` (SQLite) and the PostgreSQL
+app, so a client cannot tell which engine serves it. Constraint errors are mapped to the same
+generic `409 CONFLICT` for SQLite's `SQLITE_CONSTRAINT*` and PostgreSQL's `23502`, `23503`, `23505`,
+`23514` and `P0001`; a guard-trigger rejection is logged server-side with its real message and the
+client still receives only the generic conflict.
+
+**The slice registry** (`server/postgres/slices.ts`) is the single source of truth for what is
+converted: `SLICES` + `SLICE_SCOPE` drive `GET /api/engine`, `assertEngineUsable()`'s error message,
+the operator CLI and the tests. A slice is unlocked only by `markSliceConverted(name)` in code, and
+the registry is versioned in Git with everything else.
+
+Run it locally:
+
+```bash
+DATABASE_ENGINE=postgres DATABASE_URL=postgresql://kilele:kilele@127.0.0.1:5432/kilele npm run dev:api
+curl -i localhost:3001/api/health   # 200, and a real round trip happened
+curl -i localhost:3001/api/sales    # 503 NOT_MIGRATED - Slice 6 is not converted yet
+```
+
+---
+
 ## Remaining work
 
 Converted **one vertical slice at a time**, with the whole suite green at each step. Every slice
 means: rewrite that module's queries against `server/postgres/query.ts`, wrap each financial unit
 in `transaction()`, convert its tests to `await`, and mark the slice converted.
 
-| Slice                   | Modules to convert                                                                                    | Depends on |
-| ----------------------- | ----------------------------------------------------------------------------------------------------- | ---------- |
-| 1 Health & connection   | `server/index.ts` health route, `server/environment.ts`                                               | —          |
-| 2 Bootstrap & auth      | `server/db.ts` (bootstrap/actorFor), `server/auth.ts`, `server/sessions.ts`                           | 1          |
-| 3 Staff & permissions   | `server/management.ts`, `server/invites.ts`, `server/permissions.ts`                                  | 2          |
-| 4 Products & pricing    | `server/products.ts`, `server/catalogue.ts`                                                           | 2          |
-| 5 Inventory             | `server/stock-engine.ts`, movement ledger, counts                                                     | 4          |
-| 6 POS sales             | `server/sales.ts`, payments, receipts, cash sessions                                                  | 5          |
-| 7 Purchases & expenses  | `server/purchases.ts`, `server/expenses.ts`, supplier payments                                        | 5          |
-| 8 Approvals & reversals | `server/approvals.ts`, all six reversal paths                                                         | 6, 7       |
-| 9 Reports & analytics   | `server/reports.ts`, `server/analytics.ts`, exports                                                   | 6, 7, 8    |
-| Phase 6 utilities       | `backup-engine.ts` → `pg_dump`/PITR, `restore.ts`, `check.ts` parity, **SQLite→PostgreSQL data copy** | 9          |
-| Phase 8 SaaS            | `platform_accounts`, `plans`, `subscriptions`, `subscription_events`, `platform_admins`               | 9          |
+| Slice                              | Modules to convert                                                                                                                                                                                 | Depends on |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| ~~1 Health & connection~~ **done** | `server/index.ts` health route + startup, shared HTTP layer; `server/environment.ts` moved to Slice 2 because its preview/operational guard reads `users` and `environment_markers` with the actor | 1          |
+| 2 Bootstrap & auth                 | `server/db.ts` (bootstrap/actorFor), `server/auth.ts`, `server/sessions.ts`                                                                                                                        | 1          |
+| 3 Staff & permissions              | `server/management.ts`, `server/invites.ts`, `server/permissions.ts`                                                                                                                               | 2          |
+| 4 Products & pricing               | `server/products.ts`, `server/catalogue.ts`                                                                                                                                                        | 2          |
+| 5 Inventory                        | `server/stock-engine.ts`, movement ledger, counts                                                                                                                                                  | 4          |
+| 6 POS sales                        | `server/sales.ts`, payments, receipts, cash sessions                                                                                                                                               | 5          |
+| 7 Purchases & expenses             | `server/purchases.ts`, `server/expenses.ts`, supplier payments                                                                                                                                     | 5          |
+| 8 Approvals & reversals            | `server/approvals.ts`, all six reversal paths                                                                                                                                                      | 6, 7       |
+| 9 Reports & analytics              | `server/reports.ts`, `server/analytics.ts`, exports                                                                                                                                                | 6, 7, 8    |
+| Phase 6 utilities                  | `backup-engine.ts` → `pg_dump`/PITR, `restore.ts`, `check.ts` parity, **SQLite→PostgreSQL data copy**                                                                                              | 9          |
+| Phase 8 SaaS                       | `platform_accounts`, `plans`, `subscriptions`, `subscription_events`, `platform_admins`                                                                                                            | 9          |
 
 `integrity()` in `server/postgres/check.ts` states its own coverage: the result includes a
 `checks.pending` list naming the six core.ts checks not yet ported (expense reversal vs original,

@@ -5,6 +5,8 @@ import {
   engine,
   markSliceConverted,
   poolSettings,
+  sslSettings,
+  SSL_MODES,
 } from '../server/postgres/db.js';
 import { translate } from '../server/postgres/query.js';
 import { createDb } from '../server/db.js';
@@ -130,11 +132,39 @@ describe('connection settings', () => {
     expect(poolSettings({ DATABASE_URL: url, DATABASE_SSL: 'require' } as NodeJS.ProcessEnv).ssl).toEqual({
       rejectUnauthorized: false,
     });
+    // pg sets `servername` from the connection host, so rejecting the chain also matches the
+    // certificate's SANs: this is libpq's verify-full.
     expect(poolSettings({ DATABASE_URL: url, DATABASE_SSL: 'verify-full' } as NodeJS.ProcessEnv).ssl).toEqual(
       {
         rejectUnauthorized: true,
       },
     );
+    expect(
+      poolSettings({ DATABASE_URL: url, DATABASE_SSL: ' VERIFY-FULL ' } as NodeJS.ProcessEnv).ssl,
+    ).toEqual({
+      rejectUnauthorized: true,
+    });
+  });
+
+  it('keeps verify-ca chain-only, and never silently downgrades an unknown mode', () => {
+    const verifyCa = sslSettings('verify-ca');
+    expect(verifyCa?.rejectUnauthorized).toBe(true);
+    // A supplied checkServerIdentity means the hostname is deliberately not compared.
+    expect(typeof verifyCa?.checkServerIdentity).toBe('function');
+    expect(
+      verifyCa?.checkServerIdentity?.('some-other-host.example', { subject: {} } as never),
+    ).toBeUndefined();
+    expect(sslSettings('verify-full')?.checkServerIdentity).toBeUndefined();
+    // Guessing here would put a till on weaker TLS than its operator asked for.
+    for (const bad of ['yes', 'strict', 'verify_ca', 'tls', '1']) {
+      expect(() => sslSettings(bad)).toThrow(
+        /DATABASE_SSL must be one of disable, require, verify-ca, verify-full/,
+      );
+    }
+    expect(() => poolSettings({ DATABASE_URL: url, DATABASE_SSL: 'banana' } as NodeJS.ProcessEnv)).toThrow(
+      /TLS mode this build cannot honour/,
+    );
+    expect(SSL_MODES).toEqual(['disable', 'require', 'verify-ca', 'verify-full']);
   });
 
   it('pins search_path only for a valid identifier', () => {

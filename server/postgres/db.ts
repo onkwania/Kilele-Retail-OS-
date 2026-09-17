@@ -1,5 +1,13 @@
 import 'dotenv/config';
 import pg from 'pg';
+import {
+  SLICES,
+  SLICE_SCOPE,
+  convertedSlices,
+  isSliceConverted,
+  markSliceConverted,
+  pendingSlices,
+} from './slices.js';
 
 /**
  * PostgreSQL connection layer for Kilele Retail OS.
@@ -29,17 +37,13 @@ export const engine = (): Engine => {
 };
 
 /**
- * The async PostgreSQL application layer is being migrated module by module. Until a module
- * is converted it still uses the synchronous better-sqlite3 helpers, so selecting postgres
- * before that work is complete must stop the process instead of serving a mixed ledger.
+ * The async PostgreSQL application layer is being migrated module by module. Until a slice is
+ * converted and registered it still uses the synchronous better-sqlite3 helpers, so selecting
+ * postgres before that work is complete must stop the process instead of serving a mixed ledger.
  *
- * Flip the entries in CONVERTED as each vertical slice lands (see docs/POSTGRES_MIGRATION.md).
+ * The registry lives in server/postgres/slices.ts and is shared with the PostgreSQL app, the
+ * operator CLI and the tests.
  */
-const CONVERTED_SLICES = new Set<string>([
-  // 'health', 'bootstrap', 'auth', 'staff', 'products', 'inventory', 'sales',
-  // 'purchases', 'approvals', 'reports'
-]);
-
 export function assertEngineUsable(slice = 'Express API'): void {
   if (engine() !== 'postgres') return;
   if (!process.env.DATABASE_URL) {
@@ -47,21 +51,18 @@ export function assertEngineUsable(slice = 'Express API'): void {
       'DATABASE_ENGINE=postgres requires DATABASE_URL. Set it to the Supabase session connection string (server environment only).',
     );
   }
-  if (!CONVERTED_SLICES.has(slice)) {
+  if (!isSliceConverted(slice)) {
+    const pending = pendingSlices();
     throw new Error(
       `DATABASE_ENGINE=postgres is set but the "${slice}" module has not been converted to the async PostgreSQL data layer yet. ` +
         'The server refuses to start rather than silently serving the SQLite ledger. ' +
-        'Keep DATABASE_ENGINE=sqlite (or unset) until the slice is migrated - see docs/POSTGRES_MIGRATION.md.',
+        `Still on SQLite: ${pending.map((entry) => `${entry.slice} (${entry.scope})`).join('; ') || 'nothing'}. ` +
+        'See docs/POSTGRES_MIGRATION.md.',
     );
   }
 }
 
-/** Marks a vertical slice as converted; called from the slice's own module during migration. */
-export function markSliceConverted(slice: string): void {
-  CONVERTED_SLICES.add(slice);
-}
-
-export const convertedSlices = (): string[] => [...CONVERTED_SLICES].sort();
+export { markSliceConverted, convertedSlices, isSliceConverted, pendingSlices, SLICES, SLICE_SCOPE };
 
 // ---------------------------------------------------------------------------
 // Type parsers
@@ -96,11 +97,37 @@ export type PoolSettings = {
   max: number;
   idleTimeoutMillis: number;
   connectionTimeoutMillis: number;
-  ssl?: { rejectUnauthorized: boolean };
+  ssl?: SslSettings;
   application_name: string;
   /** PostgreSQL startup options; used to pin `search_path` for tests and staging schemas. */
   options?: string;
 };
+
+/** Accepted values for DATABASE_SSL, in increasing order of strictness. */
+export const SSL_MODES = ['disable', 'require', 'verify-ca', 'verify-full'] as const;
+export type SslMode = (typeof SSL_MODES)[number];
+export type SslSettings = Exclude<pg.PoolConfig['ssl'], boolean | undefined>;
+
+/**
+ * Resolves DATABASE_SSL into the option `pg` understands.
+ *
+ * An unrecognised value is a hard error rather than a silent downgrade: an operator who types
+ * `verify_ca` or `strict` must not end up with chain-only TLS while believing the hostname was
+ * checked. `pg` sets `servername` from the connection host, so `rejectUnauthorized: true` alone
+ * already verifies the certificate chain *and* the hostname (libpq's `verify-full`); `verify-ca`
+ * therefore opts out of the hostname check explicitly to mean what libpq means by it.
+ */
+export function sslSettings(raw: string | undefined): SslSettings | undefined {
+  const mode = (raw ?? '').trim().toLowerCase();
+  if (mode === '' || mode === 'disable' || mode === 'off' || mode === 'false') return undefined;
+  if (mode === 'require' || mode === 'true') return { rejectUnauthorized: false };
+  if (mode === 'verify-ca') return { rejectUnauthorized: true, checkServerIdentity: () => undefined };
+  if (mode === 'verify-full') return { rejectUnauthorized: true };
+  throw new Error(
+    `DATABASE_SSL must be one of ${SSL_MODES.join(', ')}; received "${raw}". ` +
+      'Refusing to open a connection with a TLS mode this build cannot honour.',
+  );
+}
 
 export function poolSettings(env: NodeJS.ProcessEnv = process.env): PoolSettings {
   const connectionString = env.DATABASE_URL?.trim();
@@ -118,14 +145,10 @@ export function poolSettings(env: NodeJS.ProcessEnv = process.env): PoolSettings
       `DATABASE_POOL_MAX must be an integer between 1 and 100, received "${env.DATABASE_POOL_MAX}"`,
     );
   }
-  // Supabase requires TLS. `require` accepts the managed certificate; `verify-full`
-  // additionally validates the chain and hostname and should be used whenever the
-  // platform CA bundle is available.
-  const mode = (env.DATABASE_SSL ?? '').trim().toLowerCase();
-  const ssl =
-    mode === '' || mode === 'disable' || mode === 'false' || mode === 'off'
-      ? undefined
-      : { rejectUnauthorized: mode === 'verify-full' || mode === 'verify-ca' || mode === 'true' };
+  // Supabase requires TLS. `require` accepts the managed certificate; `verify-ca` and
+  // `verify-full` additionally validate the chain (and, for `verify-full`, the hostname) and
+  // should be used whenever the platform CA bundle is available. See sslSettings().
+  const ssl = sslSettings(env.DATABASE_SSL);
   // Pinning search_path lets the PostgreSQL test suite run against a scratch schema inside one
   // database (a Supabase project has a single database, so tests cannot each create one).
   // The value is validated as an identifier because it is interpolated into startup options.
