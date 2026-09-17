@@ -25,12 +25,23 @@ if (!one(db, 'SELECT id FROM users LIMIT 1')) {
     const email = process.env.BOOTSTRAP_EMAIL;
     const password = process.env.BOOTSTRAP_PASSWORD;
     const business = process.env.BUSINESS_NAME;
-    if (!name || name.length < 2 || !email || !email.includes('@') || !password || password.length < 12 || !business || business.length < 2)
+    if (
+      !name ||
+      name.length < 2 ||
+      !email ||
+      !email.includes('@') ||
+      !password ||
+      password.length < 12 ||
+      !business ||
+      business.length < 2
+    )
       throw new Error(
         'Production database is uninitialised. Set BOOTSTRAP_NAME, BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD (minimum 12 characters), and BUSINESS_NAME once, then restart.',
       );
     bootstrap(db, { name, email, password, business });
-    console.log(`Workspace bootstrapped for ${email}. Remove BOOTSTRAP_NAME, BOOTSTRAP_EMAIL, and BOOTSTRAP_PASSWORD.`);
+    console.log(
+      `Workspace bootstrapped for ${email}. Remove BOOTSTRAP_NAME, BOOTSTRAP_EMAIL, and BOOTSTRAP_PASSWORD.`,
+    );
   }
 }
 seedCatalogue(db, actorFor(db, one(db, "SELECT id FROM users WHERE role_id='super_admin' LIMIT 1")!.id)!);
