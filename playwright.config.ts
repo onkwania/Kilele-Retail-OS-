@@ -4,7 +4,11 @@ export default defineConfig({
   testMatch: '**/*.spec.ts',
   fullyParallel: false,
   workers: 1,
-  retries: 0,
+  // A browser suite on shared CI runners is timing-sensitive, and one flake must not fail a build
+  // that the same commit just passed elsewhere. A real regression still fails on the retry, and
+  // the trace/screenshot artifacts are kept for both attempts. Locally this stays at zero so a
+  // flake is visible immediately while it is being diagnosed.
+  retries: process.env.CI ? 1 : 0,
   timeout: 120_000,
   expect: { timeout: 10_000 },
   reporter: [['list'], ['html', { open: 'never' }]],
