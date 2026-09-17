@@ -1,30 +1,35 @@
 import 'dotenv/config';
 import express from 'express';
+import { randomBytes } from 'node:crypto';
 import { resolve } from 'node:path';
 import type { Server } from 'node:http';
 import type { AppOptions } from '../app-shared.js';
-import { closePool, engine, ping } from './db.js';
+import { closePool, engine, getPool, ping } from './db.js';
 import { migrate, pendingMigrations } from './migrate.js';
 import { assertProtections } from './integrity.js';
 import { createPostgresApp } from './app.js';
-import { markSliceConverted } from './slices.js';
+import { explainConnectionFailure } from '../db-errors.js';
+import { createWorkspace, seedReferenceData } from './bootstrap.js';
+import { guardEnvironment, type EnvironmentReport } from './environment.js';
+import { one } from './query.js';
+import { transaction } from './transaction.js';
 
 /**
- * PostgreSQL startup - Slice 1 of the migration (health and connection).
+ * PostgreSQL startup - Slice 1 (health and connection) and Slice 2 (bootstrap and authentication).
  *
  * Boot order matters, because each step is a chance to fail clearly instead of half-starting:
  *   1. prove the connection works, with an operator-readable explanation when it does not;
  *   2. apply (or verify) the migrations that live in Git;
  *   3. prove every financial protection is installed before accepting a single request;
- *   4. only then listen.
+ *   4. seed the role/permission reference data, classify the environment's provenance and create
+ *      the owner workspace exactly once - the same three decisions server/index.ts makes for the
+ *      SQLite ledger, in the same order, with the same wording;
+ *   5. only then listen.
  *
  * No SQLite file is opened, created or read on this path: `createDb` is never imported here, and
  * `DATABASE_PATH` is ignored. The engine guard in server/db.ts makes the reverse mistake
  * (claiming postgres while opening SQLite) impossible too.
  */
-
-// Slice 1 is implemented by this module and the PostgreSQL app.
-markSliceConverted('health');
 
 export type PostgresStartupOptions = AppOptions & {
   port?: number;
@@ -41,48 +46,22 @@ export type RunningServer = {
   server: Server;
   url: string;
   port: number;
-  info: { version: string; database: string; migrationsApplied: string[]; protections: number };
+  info: {
+    version: string;
+    database: string;
+    migrationsApplied: string[];
+    protections: number;
+    environment: EnvironmentReport;
+    workspace: 'created' | 'already-present';
+    seeded: { permissions: number; roles: number; rolePermissions: number };
+  };
   close: () => Promise<void>;
 };
 
-/** Turns a driver error into the action an operator needs to take. */
-export function explainConnectionFailure(error: unknown): string {
-  const code = (error as { code?: string })?.code ?? '';
-  // A plain object is not an Error, but pg wraps some failures that way; never print
-  // "[object Object]" to an operator trying to diagnose a deploy.
-  const message =
-    error instanceof Error
-      ? error.message
-      : String((error as { message?: string })?.message ?? JSON.stringify(error) ?? '');
-  if (code === '28P01') {
-    return (
-      'PostgreSQL rejected the credentials in DATABASE_URL (SQLSTATE 28P01). Copy the connection string ' +
-      "from the database provider's own dashboard, keep it in the server environment only, and never in a VITE_* variable."
-    );
-  }
-  // Checked before the generic 28000 branch: "no pg_hba.conf entry ... no encryption" is the
-  // classic symptom of a server that requires TLS, not of a wrong password.
-  if (/pg_hba|no encryption|SSL|TLS/i.test(message)) {
-    return (
-      `The database refused this connection's transport security (${message}). Supabase requires TLS: ` +
-      'set DATABASE_SSL=require, or verify-full when the platform CA bundle is installed.'
-    );
-  }
-  if (code === '28000') {
-    return (
-      `PostgreSQL refused the role or database in DATABASE_URL (SQLSTATE 28000: ${message}). ` +
-      'Check the role name, and that it is allowed to connect from this host.'
-    );
-  }
-  if (code === '3D000') return `The database named in DATABASE_URL does not exist (${message}).`;
-  if (code === 'ENOTFOUND')
-    return `Cannot resolve the database host in DATABASE_URL (${message}). Check the hostname and DNS egress from this host.`;
-  if (code === 'ECONNREFUSED')
-    return `Nothing accepted the connection to the database host (${message}). Check the port, and whether the provider requires the client IP to be allow-listed.`;
-  if (code === 'ETIMEDOUT' || code === 'ECONNRESET')
-    return `The database connection timed out or was reset (${message}). Check the network path, and use the provider's pooled host if this service runs behind a connection limit.`;
-  return `Could not connect to PostgreSQL: ${message}`;
-}
+// Connection diagnosis is shared with the HTTP error contract in server/db-errors.ts, so a failed
+// startup and a failed request explain the same failure the same way. Re-exported for callers and
+// tests that reach it through the startup module.
+export { explainConnectionFailure };
 
 /** One round trip, so credentials, TLS, host and database are all proven before anything listens. */
 export async function verifyConnection(): Promise<{ version: string; database: string }> {
@@ -112,6 +91,49 @@ function shouldAutoMigrate(options: PostgresStartupOptions): boolean {
   return process.env.NODE_ENV !== 'production';
 }
 
+/**
+ * Creates the owner workspace if - and only if - the database has no users yet.
+ *
+ * Mirrors server/index.ts exactly: preview mode generates a throwaway owner for an isolated
+ * workspace, and every other mode requires the operator to supply bootstrap credentials once.
+ * Only the email is ever logged; the password is never printed, stored in an audit row, or
+ * included in an error message.
+ */
+export async function ensureWorkspace(options: { preview: boolean }): Promise<'created' | 'already-present'> {
+  if (await one<{ id: string }>(getPool(), 'SELECT id FROM users LIMIT 1')) return 'already-present';
+  if (options.preview) {
+    await createWorkspace({
+      name: 'Workspace Owner',
+      email: 'owner@preview.kilele.local',
+      password: randomBytes(36).toString('base64url'),
+      business: 'Kilele Bottle Store',
+    });
+    return 'created';
+  }
+  const name = process.env.BOOTSTRAP_NAME;
+  const email = process.env.BOOTSTRAP_EMAIL;
+  const password = process.env.BOOTSTRAP_PASSWORD;
+  const business = process.env.BUSINESS_NAME;
+  if (
+    !name ||
+    name.length < 2 ||
+    !email ||
+    !email.includes('@') ||
+    !password ||
+    password.length < 12 ||
+    !business ||
+    business.length < 2
+  )
+    throw new Error(
+      'Production database is uninitialised. Set BOOTSTRAP_NAME, BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD (minimum 12 characters), and BUSINESS_NAME once, then restart.',
+    );
+  await createWorkspace({ name, email, password, business });
+  console.log(
+    `Workspace bootstrapped for ${email}. Remove BOOTSTRAP_NAME, BOOTSTRAP_EMAIL, and BOOTSTRAP_PASSWORD.`,
+  );
+  return 'created';
+}
+
 export async function startPostgresServer(options: PostgresStartupOptions = {}): Promise<RunningServer> {
   const connection = await verifyConnection();
 
@@ -132,6 +154,20 @@ export async function startPostgresServer(options: PostgresStartupOptions = {}):
 
   // Never accept a request on a schema whose guards are not installed.
   const protections = await assertProtections();
+
+  const preview = options.preview ?? false;
+  const production = options.production ?? false;
+
+  // Reference data first: users.role_id is a foreign key into roles, so a workspace cannot be
+  // created before the roles exist. Seeding is idempotent (ON CONFLICT DO NOTHING) and runs in one
+  // transaction, so a half-seeded database repairs itself on the next boot.
+  const seeded = await transaction((tx) => seedReferenceData(tx));
+
+  // Provenance before anybody can sign in: a preview database must never be promoted to live
+  // books, and an operational one must never accept preview authentication.
+  const environment = await guardEnvironment({ preview, production });
+
+  const workspace = await ensureWorkspace({ preview });
 
   const app = createPostgresApp(options);
   if (options.serveClient) {
@@ -162,7 +198,8 @@ export async function startPostgresServer(options: PostgresStartupOptions = {}):
 
   console.log(
     `Kilele API listening on ${host}:${boundPort} (PostgreSQL ${connection.version.split(' ')[1]} on database "${connection.database}", ` +
-      `${protections.counts.triggers} guard triggers verified, migrations applied at boot: ${migrationsApplied.length}). ` +
+      `${protections.counts.triggers} guard triggers verified, migrations applied at boot: ${migrationsApplied.length}, ` +
+      `workspace ${workspace}, environment ${environment.markerWritten ?? (preview ? 'preview' : 'unclassified')}). ` +
       'DATABASE_PATH is ignored in this mode: no SQLite file is opened or created.',
   );
 
@@ -175,6 +212,9 @@ export async function startPostgresServer(options: PostgresStartupOptions = {}):
       database: connection.database,
       migrationsApplied,
       protections: protections.counts.triggers,
+      environment,
+      workspace,
+      seeded,
     },
     close,
   };

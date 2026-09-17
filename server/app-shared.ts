@@ -4,6 +4,11 @@ import cookieParser from 'cookie-parser';
 import { rateLimit } from 'express-rate-limit';
 import { ZodError } from 'zod';
 import { AppError } from './core.js';
+import { explainConnectionFailure, isConnectionError, isConstraintError } from './db-errors.js';
+
+// Re-exported so existing imports from this module keep working; the classification itself lives
+// in server/db-errors.ts where both engines and the startup diagnostics share it.
+export { isConstraintError, isConnectionError };
 
 /**
  * Engine-independent parts of the HTTP layer.
@@ -88,17 +93,15 @@ export function installSecurityMiddleware(app: express.Express, options: AppOpti
 }
 
 /**
- * Storage-engine constraint failures that mean the same thing to a client: the write was refused
- * by a database-level guard, nothing partial was stored, and the operator should refresh and
- * check references. SQLite reports `SQLITE_CONSTRAINT*`; PostgreSQL reports SQLSTATE classes
- * 23xxx plus `P0001`, which is what a guard trigger's `RAISE EXCEPTION` produces.
+ * An unreachable or refusing database is reported as 503 DATABASE_UNAVAILABLE, never as a 401 or
+ * a 500. A till that cannot reach its ledger must say so: "your password is wrong" would send a
+ * cashier into a lockout loop, and "internal error" hides an outage the operator can fix in
+ * seconds by checking DATABASE_URL, TLS or the provider's IP allow-list.
  */
-const PG_CONSTRAINT_CODES = new Set(['23502', '23503', '23505', '23514', 'P0001']);
-
-export function isConstraintError(err: { code?: string }): boolean {
-  if (typeof err?.code !== 'string') return false;
-  return err.code.startsWith('SQLITE_CONSTRAINT') || PG_CONSTRAINT_CODES.has(err.code);
-}
+const OUTAGE_RESPONSE = {
+  error: 'The database is unavailable, so nothing was recorded. Retry once the connection is restored.',
+  code: 'DATABASE_UNAVAILABLE',
+};
 
 const CONFLICT_RESPONSE = {
   error:
@@ -115,6 +118,12 @@ export function installErrorHandling(app: express.Express): void {
         code: 'VALIDATION_ERROR',
       });
     if (err instanceof AppError) return res.status(err.status).json({ error: err.message, code: err.code });
+    if (isConnectionError(err)) {
+      // The diagnosis goes to the operator's log; the client gets a retryable outage and nothing
+      // that could leak the connection string or a credential.
+      console.error('[database] connection failure:', explainConnectionFailure(err));
+      return res.status(503).json(OUTAGE_RESPONSE);
+    }
     if (isConstraintError(err)) {
       // The database refused the write. The precise guard is logged for operators and never
       // returned, so a rejected write cannot be used to probe the schema.

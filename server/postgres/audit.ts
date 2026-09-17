@@ -1,5 +1,5 @@
 import { id, now, scope, sha, type Actor } from '../core.js';
-import { all, insert, one } from './query.js';
+import { all, insert, one, type Executor } from './query.js';
 import type { Tx } from './transaction.js';
 
 /**
@@ -58,8 +58,13 @@ export async function audit(
   await insert(tx, 'audit_logs', { ...entry, hash: sha(JSON.stringify(entry)) });
 }
 
-/** The actor a request runs as, including effective permissions. Port of db.ts actorFor(). */
-export async function actorFor(tx: Tx, userId: string): Promise<Actor | null> {
+/**
+ * The actor a request runs as, including effective permissions. Port of db.ts actorFor().
+ *
+ * Accepts any executor - the pool for a read-only session lookup, or a transaction client when the
+ * caller is already inside a financial unit - because it only ever reads.
+ */
+export async function actorFor(tx: Tx | Executor, userId: string): Promise<Actor | null> {
   const user = await one<Actor & { must_change_password: number }>(
     tx,
     'SELECT id, business_id, branch_id, role_id, name, email, must_change_password FROM users WHERE id = ? AND active = 1',

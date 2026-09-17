@@ -61,9 +61,11 @@ export const REQUIRED_TRIGGERS: Array<[string, string]> = [
   ['approval_requests', 'approval_no_delete'],
   ['cash_sessions', 'cash_session_preserve'],
   ['cash_sessions', 'cash_session_no_delete'],
-  ['user_invites', 'invite_preserve_terms'],
-  ['user_invites', 'invite_no_terminal_update'],
-  ['user_invites', 'invite_no_delete'],
+  // Renamed by migration 004: the product name is staff_invitations, served at
+  // /api/staff/invitations. The guards and their error messages are unchanged.
+  ['staff_invitations', 'staff_invitation_preserve_terms'],
+  ['staff_invitations', 'staff_invitation_no_terminal_update'],
+  ['staff_invitations', 'staff_invitation_no_delete'],
   ['purchases', 'active_purchase_invoice'],
   ['products', 'product_price_guard'],
 ];
@@ -91,8 +93,8 @@ export const REQUIRED_INDEXES = [
   'idx_audit_scope',
   'idx_purchases_scope',
   'idx_journal_scope',
-  'idx_invites_scope',
-  'idx_invites_email',
+  'idx_staff_invitations_scope',
+  'idx_staff_invitations_email',
   'purchase_invoice_lookup',
   'idx_inventory_movements_position',
   'idx_price_history_product_seq',

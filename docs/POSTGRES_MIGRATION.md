@@ -2,32 +2,36 @@
 
 **Read this first: what is finished and what is not.**
 
-| Part of the plan                                                                                                     | Status                                      | Evidence                                                                                                    |
-| -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| Phase 1 — repository preparation (engine switch, dependencies, env, CI)                                              | **Done**                                    | `server/postgres/db.ts`, `.env.example`, `package.json`, `.github/workflows/ci.yml`                         |
-| Phase 2 — PostgreSQL data-access abstraction (pool, async helpers, transactions)                                     | **Done**                                    | `server/postgres/{db,query,transaction}.ts`                                                                 |
-| Phase 3 — schema conversion as versioned migrations                                                                  | **Done, verified against PostgreSQL 18.4**  | `server/postgres/migrations/001_initial_schema.sql`                                                         |
-| Phase 4 — financial protection triggers                                                                              | **Done, verified behaviourally (39 tests)** | `server/postgres/migrations/002_integrity_triggers.sql`, `003_indexes.sql`, `tests/postgres-schema.test.ts` |
-| Migration runner, protection verifier, ledger checker, bootstrap, operator CLI                                       | **Done**                                    | `server/postgres/{migrate,integrity,check,bootstrap,audit,cli}.ts`                                          |
-| Phase 5 — Slice 1: health, connection diagnostics, fail-closed routing, startup sequence                             | **Done, verified on PostgreSQL 18.4**       | `server/postgres/{slices,app,server}.ts`, `server/app-shared.ts`, `tests/postgres-slice1-health.test.ts`    |
-| Phase 5 — Slices 2–9: converting the ~20 Express modules from synchronous SQLite to the async layer                  | **In progress — 1 of 9 done**               | see [Remaining work](#remaining-work)                                                                       |
-| Phase 6 — backup/restore/check utilities on PostgreSQL (`pg_dump`, PITR, restore drill), SQLite→PostgreSQL data copy | **Not started**                             | `server/backup-engine.ts` and `server/restore.ts` are still SQLite-only                                     |
-| Phase 7 — invitation-based staff provisioning                                                                        | **Already shipped, earlier, on SQLite**     | commit `f9272ee`, `server/invites.ts`, `tests/invites.test.ts`                                              |
-| Phase 8 — SaaS/platform tables (`platform_accounts`, `plans`, `subscriptions`, …)                                    | **Not started**                             | none of those tables exist in either schema                                                                 |
+| Part of the plan                                                                                                     | Status                                                    | Evidence                                                                                                        |
+| -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Phase 1 — repository preparation (engine switch, dependencies, env, CI)                                              | **Done**                                                  | `server/postgres/db.ts`, `.env.example`, `package.json`, `.github/workflows/ci.yml`                             |
+| Phase 2 — PostgreSQL data-access abstraction (pool, async helpers, transactions)                                     | **Done**                                                  | `server/postgres/{db,query,transaction}.ts`                                                                     |
+| Phase 3 — schema conversion as versioned migrations                                                                  | **Done, verified against PostgreSQL 18.4**                | `server/postgres/migrations/001_initial_schema.sql`                                                             |
+| Phase 4 — financial protection triggers                                                                              | **Done, verified behaviourally (39 tests)**               | `server/postgres/migrations/002_integrity_triggers.sql`, `003_indexes.sql`, `tests/postgres-schema.test.ts`     |
+| Migration runner, protection verifier, ledger checker, bootstrap, operator CLI                                       | **Done**                                                  | `server/postgres/{migrate,integrity,check,bootstrap,audit,cli}.ts`                                              |
+| Phase 5 — Slice 1: health, connection diagnostics, fail-closed routing, startup sequence                             | **Done, verified on PostgreSQL 18.4**                     | `server/postgres/{slices,app,server}.ts`, `server/app-shared.ts`, `tests/postgres-slice1-health.test.ts`        |
+| Phase 5 — Slice 2: bootstrap, authentication, sessions, CSRF, lockout and the audit chain                            | **Done, verified on PostgreSQL 18.4**                     | `server/postgres/{auth,sessions,environment}.ts`, `server/auth-shared.ts`, `tests/postgres-slice2-auth.test.ts` |
+| Phase 5 — Slices 3–9: converting the remaining Express modules from synchronous SQLite to the async layer            | **In progress — 2 of 9 done**                             | see [Remaining work](#remaining-work)                                                                           |
+| Phase 6 — backup/restore/check utilities on PostgreSQL (`pg_dump`, PITR, restore drill), SQLite→PostgreSQL data copy | **Not started**                                           | `server/backup-engine.ts` and `server/restore.ts` are still SQLite-only                                         |
+| Phase 7 — invitation-based staff provisioning                                                                        | **Shipped on SQLite; final naming adopted in PostgreSQL** | commit `f9272ee`, `server/invites.ts`, migration `004_rename_staff_invitations.sql`                             |
+| Phase 8 — SaaS/platform tables (`platform_accounts`, `plans`, `subscriptions`, …)                                    | **Not started**                                           | none of those tables exist in either schema                                                                     |
 
-**Consequence, stated plainly:** `DATABASE_ENGINE=postgres` now **starts a real API server**, but it
-serves only two routes — `GET /api/health` and `GET /api/engine`. **Every other `/api` route answers
-`503 NOT_MIGRATED`**, naming the route and listing which slices are converted, so a deployment can
+**Consequence, stated plainly:** `DATABASE_ENGINE=postgres` now **starts a real API server** that can
+bootstrap a workspace and sign users in — `GET /api/health`, `GET /api/engine`, `GET /api/auth/me`
+and the sign-in, sign-out, preview and password routes are live. **Every business route still
+answers `503 NOT_MIGRATED`, even with a valid session cookie**: no product, stock, sale, purchase,
+approval or report can be read or written on PostgreSQL yet. That is deliberate, so a deployment can
 never claim to be on PostgreSQL while silently serving the SQLite ledger, and no client can mistake
-an unconverted endpoint for a successful empty result. The database layer is finished and proven;
-the ~20 Express modules that use it are being converted one vertical slice at a time. Startup order
-is verify connection → apply or verify migrations → prove the financial protections → listen; if any
-step fails the process exits with an operator-readable diagnosis instead of half-booting.
-See [Engine guard](#engine-guard) and [Slice 1](#slice-1--health-connection-startup).
+an unconverted endpoint for a successful empty result. Startup order is verify connection → apply or
+verify migrations → prove the financial protections → seed roles → classify provenance → create the
+workspace once → listen; if any step fails the process exits with an operator-readable diagnosis
+instead of half-booting. See [Engine guard](#engine-guard), [Slice 1](#slice-1--health-connection-startup)
+and [Slice 2](#slice-2--bootstrap-authentication-sessions-csrf-and-audit).
 
 Nothing in this work changes the running product. The default engine is still `sqlite`, the demo
-deployment is untouched, all 132 existing SQLite tests still pass unchanged, and 74 PostgreSQL tests
-pass on top of them when `DATABASE_URL` is set (189 in total).
+deployment is untouched, and **all 133 SQLite tests pass with no database configured** (95 PostgreSQL
+tests skip). With `DATABASE_URL` set, **228 tests pass**: those 133 plus 39 schema/trigger tests, 18
+Slice 1 tests and 38 Slice 2 tests.
 
 ---
 
@@ -65,19 +69,30 @@ server/postgres/
 ├── cli.ts           ping | migrate | status | protections | check | bootstrap
 ├── slices.ts        the slice registry: what is converted, what is not, and its scope
 ├── app.ts           the PostgreSQL Express app: health, engine status, 503 NOT_MIGRATED
-├── server.ts        Slice 1 startup: verify → migrate → prove protections → listen
+├── server.ts        startup: verify → migrate → protections → seed → provenance → workspace → listen
+├── environment.ts   preview/operational provenance guard (Slice 2)
+├── sessions.ts      hashed session tokens, CSRF tokens, the sign-in attempt ledger (Slice 2)
+├── auth.ts          sign-in, sign-out, preview login, password rotation, session middleware (Slice 2)
 └── migrations/
     ├── 001_initial_schema.sql        47 tables in foreign-key dependency order
     ├── 002_integrity_triggers.sql    65 triggers: every guard the SQLite ledger enforces
-    └── 003_indexes.sql               the 19 real indexes + 4 documented additions
+    ├── 003_indexes.sql               the 19 real indexes + 4 documented additions
+    └── 004_rename_staff_invitations.sql  user_invites → staff_invitations, renaming its
+                                          constraints, indexes and triggers with it
 server/passwords.ts   scrypt hashing extracted from db.ts so the PostgreSQL path never
                       imports better-sqlite3 (db.ts re-exports it; no call site changed)
-server/app-shared.ts  security headers, body limits, rate limit, the single error contract and
-                      constraint-error mapping, shared byte-for-byte by both engines
+server/app-shared.ts  security headers, body limits, rate limit and the single error contract,
+                      shared byte-for-byte by both engines
+server/auth-shared.ts scrypt verification, cookie policy, CSRF/Origin gate, protect(), lockout
+                      thresholds - security decisions defined once for both engines
+server/db-errors.ts   engine-neutral error classification: constraint vs connection failure, and
+                      the operator-facing explanation of each
 tests/postgres-schema.test.ts        39 behavioural tests against a real server
 tests/postgres-engine-guard.test.ts  17 tests that need no server (run everywhere)
 tests/postgres-slice1-health.test.ts 18 tests over real HTTP: health, headers, fail-closed routing,
                                      startup diagnostics, boot-and-shutdown on an ephemeral port
+tests/postgres-slice2-auth.test.ts   38 tests: one-time bootstrap, provenance, sign-in, lockout,
+                                     CSRF, session revocation, concurrency and the audit chain
 ```
 
 Operator commands:
@@ -89,7 +104,16 @@ npm run db:pg:status       # which migrations are pending
 npm run db:pg:protections  # are all guards installed? (exit 1 if not)
 npm run db:pg:check        # recompute the ledger, verify the audit chain (exit 1 if dirty)
 npm run db:pg:bootstrap    # migrate + seed roles/permissions + create the owner once
-npm run db:pg:test         # behavioural suite (needs DATABASE_URL)
+npm run db:pg:test         # PostgreSQL suites: schema, Slice 1, Slice 2, engine guard
+```
+
+Production release commands. These run the **built** bundle, so a deploy does not need `tsx` or the
+source tree, and they are the exact strings to put in a release/deploy step:
+
+```bash
+npm run release:migrate      # node dist/server/postgres/cli.js migrate
+npm run release:protections  # node dist/server/postgres/cli.js protections (exit 1 if a guard is missing)
+npm run release:pg           # migrate, then protections - the whole release gate in one command
 ```
 
 ---
@@ -132,8 +156,29 @@ imitation:
   the secret, and a full boot on an ephemeral port verifies **65 guard triggers** while creating
   **no** SQLite file. `DATABASE_AUTO_MIGRATE=false` refuses to start with _missing 3 migration(s)_
   and names the release command; `true` applies 001/002/003 on an empty schema.
+- **Slice 2**, 38 tests over real HTTP against the same server: a clean database creates the first
+  owner, business and branch with a `workspace.created` audit row; a second bootstrap is refused and
+  three simultaneous bootstraps leave exactly one workspace; preview provenance blocks promotion and
+  operational provenance blocks preview sign-in; a legacy `*@preview.kilele.local` identity is
+  detected even in upper case; the bootstrap passphrase never appears in a log, while the email does;
+  an uninitialised non-preview database refuses to start; sign-in works (and matches the address in
+  any case), a wrong password gives the same 401 as an unknown address, a deactivated user is
+  refused even with the right password and their live session dies with the account; hashing stays
+  `scrypt-v2` and a legacy hash is upgraded in place with an audit row; rotation requires the current
+  password, refuses reuse and revokes every other session; a temporary password blocks every
+  protected route with `PASSWORD_CHANGE_REQUIRED`; an unreachable database answers **503
+  DATABASE_UNAVAILABLE** and never 401; only the SHA-256 of a session token is stored and the raw
+  token appears in no row and no audit text; expiry, logout and rotation all revoke; CSRF, `Origin`
+  and `Sec-Fetch-Site` are enforced while reads stay exempt; five failures lock the address for 15
+  minutes and the correct password cannot bypass the lock; four concurrent failed logins store 4 (not
+  1); six concurrent sign-ins produce six independent valid sessions; the audit chain verifies after
+  bootstrap → failure → sign-in → rotation, an ordinary `UPDATE` of an audit row is refused by the
+  immutability trigger, a tampered row is still detected by `verifyAudit()`, a rolled-back
+  transaction leaves no audit fragment, and `audit()` refuses to run outside a transaction.
 - CI reproduces this on every push: job `postgres` starts a `postgres:16` service container with
-  `REQUIRE_POSTGRES_TESTS=1`, so a missing database **fails** the build instead of skipping.
+  `REQUIRE_POSTGRES_TESTS=1`, so a missing database **fails** the build instead of skipping. The same
+  job then boots the API from source, signs in over HTTP, and asserts that an authenticated request
+  to `/api/sales` still answers `503 NOT_MIGRATED`.
 
 Local run without Docker or a Supabase project:
 
@@ -270,6 +315,111 @@ curl -i localhost:3001/api/sales    # 503 NOT_MIGRATED - Slice 6 is not converte
 
 ---
 
+## Slice 2 — bootstrap, authentication, sessions, CSRF and audit
+
+`server/postgres/{environment,sessions,auth}.ts` are the async port of `server/environment.ts` and
+`server/auth.ts`; `server/postgres/bootstrap.ts` (built in Phase 3) is now wired into startup.
+
+**Routes that are live on PostgreSQL:**
+
+| Route                     | Behaviour                                                                          |
+| ------------------------- | ---------------------------------------------------------------------------------- |
+| `POST /api/auth/login`    | scrypt verification, lockout, legacy-hash upgrade, one session, `auth.login` audit |
+| `POST /api/auth/preview`  | preview workspaces only; refuses to exist outside `PREVIEW_MODE=true`              |
+| `POST /api/auth/logout`   | revokes the session, clears the cookie, writes `auth.logout`                       |
+| `POST /api/auth/password` | requires the current password, refuses reuse, revokes **every** session, reissues  |
+| `GET /api/auth/me`        | actor, CSRF token, business and branch                                             |
+| every other `/api/...`    | `503 NOT_MIGRATED` — including with a valid session cookie                         |
+
+**What is shared, so the two engines cannot drift.** `server/auth-shared.ts` holds the scrypt
+verification (including the legacy `salt:key` form and the timing-safe comparison against a dummy
+hash for unknown addresses), the cookie policy (`httpOnly`, `SameSite=Strict`, `Secure`,
+partitioned only for embedded previews, 12-hour `maxAge`), the lockout thresholds (5 failures, 15
+minutes), the rate limits (20 sign-ins and 10 password changes per 15 minutes), `protect()` and the
+CSRF/`Origin`/`Sec-Fetch-Site` gate. Both HTTP surfaces import the same functions, so a client
+cannot tell which engine authenticated it.
+
+**Three properties that are stronger on PostgreSQL than they were on SQLite:**
+
+1. **Failed-sign-in bookkeeping is committed, then the 401 is raised.** The attempt counter, the
+   lockout and the `auth.login_failed` audit row are written in a transaction that COMMITs, and the
+   rejection happens afterwards. Throwing inside the transaction would roll the counter back and
+   make brute force free.
+2. **The attempt counter increments in SQL, not in JavaScript.** `ON CONFLICT (email) DO UPDATE`
+   with the arithmetic in the statement means two simultaneous bad logins cannot both store `1`; the
+   second writer blocks on the unique index and adds to the committed value. Verified: four
+   concurrent failures store 4.
+3. **Every unit is one transaction on one client.** Sign-in, sign-out, rotation, bootstrap and the
+   audit row that describes each of them succeed or fail together, and `audit()` still refuses to run
+   outside a transaction because the hash chain is global and needs its advisory lock.
+
+**Environment provenance** (`server/postgres/environment.ts`) reads the same three signals as
+SQLite — the `environment_markers` row, an `auth.preview_login` audit row, and a legacy
+`*@preview.kilele.local` identity — and refuses in the same words: a preview database cannot be
+promoted to live books, an operational database cannot accept preview authentication, and preview
+plus production is prohibited outright. `lower(email) LIKE` replaces SQLite's case-insensitive
+`LIKE`, so an upper-case legacy identity cannot slip through.
+
+**Startup now finishes the job** (`server/postgres/server.ts`): after the migrations and the guard
+triggers are verified it seeds roles and permissions (idempotent, one transaction), classifies the
+environment, and creates the owner workspace **once** — a throwaway owner in preview mode, or
+`BOOTSTRAP_NAME`/`BOOTSTRAP_EMAIL`/`BOOTSTRAP_PASSWORD`/`BUSINESS_NAME` everywhere else, with the
+same refusal message the SQLite startup uses. Only the email is logged.
+
+**Naming.** Migration `004_rename_staff_invitations.sql` renames `user_invites` to
+`staff_invitations`, plus its constraints, indexes and the three invitation triggers, so the final
+product naming is in place before any invitation code runs on PostgreSQL. See
+[Two deviations](#two-deviations-from-the-plan-you-should-know-about) for what happens on SQLite.
+
+---
+
+## Production deploy order (Render + Supabase)
+
+The safe sequence, and the exact commands — confirmed from `package.json` and the built output, not
+guessed. `dist/server/migrate.js` **does not exist**; the migration CLI is bundled as
+`dist/server/postgres/cli.js`.
+
+```
+Build image → run migrations → verify schema and guard triggers → start API
+```
+
+| Render field        | Value                                                                                                                                                                                                                                          |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Build command       | `npm ci && npm run build`                                                                                                                                                                                                                      |
+| **Release command** | `npm run release:pg` (= `node dist/server/postgres/cli.js migrate && … protections`)                                                                                                                                                           |
+| Start command       | `npm start` (= `NODE_ENV=production node dist/server/index.js`)                                                                                                                                                                                |
+| Environment         | `DATABASE_ENGINE=postgres`, `DATABASE_URL` (secret), `DATABASE_AUTO_MIGRATE=false`, `DATABASE_SSL=require` (or `verify-full`), `NODE_ENV=production`, `APP_ORIGIN=https://<your-host>`, `PUBLIC_HOST`, `TRUST_PROXY` only behind a known proxy |
+
+Why the release command cannot be skipped:
+
+- With `DATABASE_AUTO_MIGRATE=false` (the production default) an unmigrated database makes the API
+  **exit before listening**: _"The database is missing 4 migration(s): …"_. Verified against a
+  virgin PostgreSQL database.
+- Even after migrating, the API refuses to listen unless **all 65 guard triggers** are present, so a
+  database that lost its protections cannot serve a till.
+- `npm run release:protections` exits non-zero when a guard is missing, which fails the deploy
+  instead of shipping a ledger without its immutability rules.
+- A rolling restart can never apply a migration by itself in production; schema changes are applied
+  once, by the release step, from the SQL that is versioned in Git.
+
+One-time bootstrap on a fresh Supabase database: run the release command, then either set
+`BOOTSTRAP_NAME`, `BOOTSTRAP_EMAIL`, `BOOTSTRAP_PASSWORD` (12+ characters) and `BUSINESS_NAME` for a
+single start, or run `npm run db:pg:bootstrap` with those variables present and then remove them.
+Bootstrap is one-time only: a second run creates nothing and changes nothing.
+
+**What cannot be verified from this repository.** There is no `render.yaml` blueprint here, so the
+Render service is configured in the dashboard, and neither the Render settings nor a staging
+deployment can be read from this sandbox. The two staging checks — `/api/health` returning
+`engine: "postgres"` and `/api/sales` returning `NOT_MIGRATED` — are reproduced exactly by CI on
+every push, and the commands to confirm them against a live host are:
+
+```bash
+curl -s https://<staging-host>/api/health    # expect "engine":"postgres" and "database":"available"
+curl -si https://<staging-host>/api/sales    # expect HTTP 503 and "code":"NOT_MIGRATED"
+```
+
+---
+
 ## Remaining work
 
 Converted **one vertical slice at a time**, with the whole suite green at each step. Every slice
@@ -279,7 +429,7 @@ in `transaction()`, convert its tests to `await`, and mark the slice converted.
 | Slice                              | Modules to convert                                                                                                                                                                                 | Depends on |
 | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
 | ~~1 Health & connection~~ **done** | `server/index.ts` health route + startup, shared HTTP layer; `server/environment.ts` moved to Slice 2 because its preview/operational guard reads `users` and `environment_markers` with the actor | 1          |
-| 2 Bootstrap & auth                 | `server/db.ts` (bootstrap/actorFor), `server/auth.ts`, `server/sessions.ts`                                                                                                                        | 1          |
+| ~~2 Bootstrap & auth~~ **done**    | `server/postgres/{bootstrap,auth,sessions,environment}.ts`, `server/auth-shared.ts`; `server/db.ts` `actorFor`/`bootstrap` ported                                                                  | 1          |
 | 3 Staff & permissions              | `server/management.ts`, `server/invites.ts`, `server/permissions.ts`                                                                                                                               | 2          |
 | 4 Products & pricing               | `server/products.ts`, `server/catalogue.ts`                                                                                                                                                        | 2          |
 | 5 Inventory                        | `server/stock-engine.ts`, movement ledger, counts                                                                                                                                                  | 4          |
@@ -345,9 +495,16 @@ These were found by verification, not guessed:
   `feature/postgres-supabase-migration`. The work is committed to the pinned branch and reaches
   `main` through the existing pull request. If you want the branch name from the plan, say so and
   it can be recreated from these commits in a session that is not pinned.
-- **Phase 7 naming.** Invitation-based staff provisioning already shipped (commit `f9272ee`) as
-  `user_invites` + `/api/invites`, with hashed tokens, 7-day expiry, per-branch limits, duplicate
-  email revocation and super-admin-only admin invitations. The plan names the same feature
-  `staff_invitations` + `/api/staff/invitations`. The behaviour is implemented; only the names
-  differ. Renaming means a migration plus client/API changes — say the word and it will be done as
-  its own slice.
+- **Phase 7 naming — resolved in PostgreSQL, deferred on SQLite.** Invitation-based staff
+  provisioning already shipped on SQLite (commit `f9272ee`) as `user_invites` + `/api/invites`, with
+  hashed tokens, 7-day expiry, per-branch limits, duplicate email revocation and super-admin-only
+  admin invitations. Migration `004_rename_staff_invitations.sql` renames the PostgreSQL table to
+  **`staff_invitations`** — together with its constraints, indexes and trigger names — so the final
+  KilelePro naming exists before any invitation code runs against PostgreSQL, and Slice 3 will serve
+  **`/api/staff/invitations`**.
+  The SQLite side keeps `user_invites` and `/api/invites` for now, because renaming a table there
+  would leave existing invitations behind in the old table of a live database (`CREATE TABLE IF NOT
+EXISTS` would simply make a new empty one). When Slice 3 lands, the SQLite app will serve
+  `/api/staff/invitations` as the canonical route with `/api/invites` kept as a deprecated alias for
+  one release, and the SQLite→PostgreSQL copy tool must map `user_invites` → `staff_invitations`.
+  Nothing is lost either way; the mapping is recorded here so it is not rediscovered later.

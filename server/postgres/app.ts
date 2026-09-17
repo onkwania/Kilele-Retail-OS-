@@ -6,7 +6,14 @@ import {
   type AppOptions,
 } from '../app-shared.js';
 import { convertedSlices, engine, ping } from './db.js';
-import { pendingSlices } from './slices.js';
+import { markSliceConverted, pendingSlices } from './slices.js';
+import { installPostgresAuth } from './auth.js';
+
+// The slices this HTTP surface actually serves. Registering them here keeps `GET /api/engine`,
+// the engine guard's message, the operator CLI and the tests reading one list.
+markSliceConverted('health');
+markSliceConverted('bootstrap');
+markSliceConverted('auth');
 
 /**
  * The PostgreSQL HTTP surface - Slice 1 of the migration (health and connection).
@@ -27,6 +34,15 @@ export function createPostgresApp(options: AppOptions = {}): express.Express {
   }
   const app = express();
   installSecurityMiddleware(app, options);
+
+  // --- Slice 2: sessions, authentication, CSRF and lockout --------------------------------
+  // Installed before the health route so the session middleware and the CSRF/origin gate apply to
+  // every /api request exactly as they do on the SQLite surface.
+  installPostgresAuth(app, {
+    preview: options.preview ?? false,
+    production: options.production ?? false,
+    origin: options.origin,
+  });
 
   // --- Slice 1: health and connection -----------------------------------------------------
   // A real round trip, not a static string: if the pool cannot reach the database the till must

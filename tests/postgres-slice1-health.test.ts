@@ -38,6 +38,10 @@ if (!DATABASE_URL) {
 
 const describePg = DATABASE_URL ? describe : describe.skip;
 const SCHEMA = `kilele_pg_api_${process.pid}_${Math.random().toString(36).slice(2, 8)}`;
+/** Every migration in Git, so the counts below follow the schema instead of a hardcoded list. */
+const MIGRATIONS = readdirSync('server/postgres/migrations')
+  .filter((file) => file.endsWith('.sql'))
+  .sort();
 
 async function raw(sql: string) {
   const client = new pg.Client({ connectionString: DATABASE_URL });
@@ -149,7 +153,9 @@ describePg('Slice 1 - PostgreSQL health, connection and fail-closed routing', ()
     // so nothing can be probed for a shape the PostgreSQL engine does not serve yet.
     const unconvertedRoutes: Array<[string, string]> = [
       ['get', '/api/sales'],
-      ['post', '/api/auth/login'],
+      // Slice 2 converted authentication, so /api/auth/login now answers for real; its own
+      // acceptance lives in tests/postgres-slice2-auth.test.ts.
+      ['post', '/api/purchases'],
       ['get', '/api/reports/daily'],
       ['post', '/api/inventory/receive'],
       ['get', '/api/integrity'],
@@ -257,7 +263,9 @@ describePg('Slice 1 - PostgreSQL health, connection and fail-closed routing', ()
   describe('the server boots and shuts down cleanly', () => {
     it('serves health over real HTTP, then closes the pool', async () => {
       const filesBefore = sqliteFiles();
-      const running = await startPostgresServer({ port: 0, installSignalHandlers: false });
+      // preview: true so startup creates its own throwaway owner; Slice 2 made an uninitialised
+      // non-preview database a startup error, which is asserted in the Slice 2 suite.
+      const running = await startPostgresServer({ port: 0, installSignalHandlers: false, preview: true });
       try {
         expect(running.port).toBeGreaterThan(0);
         expect(running.info.protections).toBeGreaterThanOrEqual(65);
@@ -272,9 +280,17 @@ describePg('Slice 1 - PostgreSQL health, connection and fail-closed routing', ()
       }
       // After close() the listener is gone and the pool is ended; a new pool must be buildable.
       await expect(request(running.url).get('/api/health')).rejects.toThrow();
-      const reopened = await startPostgresServer({ port: 0, installSignalHandlers: false });
+      const reopened = await startPostgresServer({ port: 0, installSignalHandlers: false, preview: true });
       await request(reopened.url).get('/api/health').expect(200);
       await reopened.close();
+      // The boot above classified this database as a preview, and that provenance is durable:
+      // reopening the same database in non-preview mode must be refused (Slice 2's environment
+      // guard), so a scratch or preview database can never be promoted to live books by accident.
+      await expect(
+        startPostgresServer({ port: 0, installSignalHandlers: false, preview: false, production: false }),
+      ).rejects.toThrow(/cannot be promoted to live books/);
+      await closePool().catch(() => undefined);
+      setPool(null);
       // PostgreSQL mode never touches a SQLite file.
       expect(sqliteFiles()).toEqual(filesBefore);
     }, 60_000);
@@ -289,18 +305,15 @@ describePg('Slice 1 - PostgreSQL health, connection and fail-closed routing', ()
       setPool(null);
       try {
         await expect(
-          startPostgresServer({ port: 0, installSignalHandlers: false, autoMigrate: false }),
-        ).rejects.toThrow(/missing 3 migration\(s\)/);
+          startPostgresServer({ port: 0, installSignalHandlers: false, autoMigrate: false, preview: true }),
+        ).rejects.toThrow(new RegExp(`missing ${MIGRATIONS.length} migration\\(s\\)`));
         const running = await startPostgresServer({
           port: 0,
           installSignalHandlers: false,
           autoMigrate: true,
+          preview: true,
         });
-        expect(running.info.migrationsApplied).toEqual([
-          '001_initial_schema.sql',
-          '002_integrity_triggers.sql',
-          '003_indexes.sql',
-        ]);
+        expect(running.info.migrationsApplied).toEqual(MIGRATIONS);
         await running.close();
       } finally {
         process.env.DATABASE_SEARCH_PATH = saved;

@@ -130,7 +130,8 @@ jobs:
       - name: PostgreSQL API boots and fails closed on unconverted routes
         run: |
           # tsx, not dist: this job does not build the client, and the API must boot from source.
-          DATABASE_ENGINE=postgres PORT=3999 npx tsx server/index.ts > /tmp/pg-server.log 2>&1 &
+          # PREVIEW_MODE=true so startup creates its own throwaway owner and Slice 2 can sign in.
+          DATABASE_ENGINE=postgres PREVIEW_MODE=true PORT=3999 npx tsx server/index.ts > /tmp/pg-server.log 2>&1 &
           SERVER_PID=$!
           for _ in $(seq 1 60); do
             curl -fsS http://127.0.0.1:3999/api/health > /tmp/pg-health.json 2>/dev/null && break
@@ -148,6 +149,16 @@ jobs:
           grep -q '"engine":"postgres"' /tmp/pg-health.json
           [ "$(cat /tmp/pg-sales.code)" = "503" ]
           grep -q '"code":"NOT_MIGRATED"' /tmp/pg-sales.json
+          # Slice 2: authentication works, and being authenticated still does not open a money route.
+          curl -s -c /tmp/pg-cookies.txt -o /tmp/pg-preview.json -w '%{http_code}' \
+            -X POST http://127.0.0.1:3999/api/auth/preview > /tmp/pg-preview.code
+          [ "$(cat /tmp/pg-preview.code)" = "200" ]
+          grep -q '"csrf"' /tmp/pg-preview.json
+          grep -q 'kilele_session' /tmp/pg-cookies.txt
+          curl -s -b /tmp/pg-cookies.txt -o /tmp/pg-sales-auth.json -w '%{http_code}' \
+            http://127.0.0.1:3999/api/sales > /tmp/pg-sales-auth.code
+          [ "$(cat /tmp/pg-sales-auth.code)" = "503" ]
+          grep -q '"code":"NOT_MIGRATED"' /tmp/pg-sales-auth.json
           # The PostgreSQL engine must not open or create a SQLite ledger file.
           test -z "$(ls data/*.sqlite data/*.sqlite-wal data/*.sqlite-shm 2>/dev/null)"
 

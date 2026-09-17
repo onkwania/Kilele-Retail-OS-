@@ -90,13 +90,15 @@ migration and re-running, which **exited 1** with _"Applied migrations must neve
 
 What this checkpoint does **not** claim:
 
-- **The API cannot serve money on PostgreSQL yet.** Slice 1 is converted, so
-  `DATABASE_ENGINE=postgres` boots after a verified connection round trip, applied migrations and
-  all 65 guard triggers, and serves `GET /api/health` plus `GET /api/engine`. Every other `/api`
-  route answers `503 NOT_MIGRATED` by design, because the remaining ~20 Express modules still use
-  the synchronous SQLite helpers. Converting them (Slices 2–9 of the plan) is the remaining majority
-  of the work and is tracked in [docs/POSTGRES_MIGRATION.md](POSTGRES_MIGRATION.md). Nothing was cut
-  over and no deployment changed.
+- **The API cannot serve money on PostgreSQL yet.** Slices 1 and 2 are converted, so
+  `DATABASE_ENGINE=postgres` boots after a verified connection round trip, applied migrations, all 65
+  guard triggers, seeded roles and an environment-provenance check; it can create the owner workspace
+  once and sign users in (`/api/auth/login`, `/logout`, `/password`, `/me`, plus `/api/health` and
+  `/api/engine`). Every business route still answers `503 NOT_MIGRATED` **even with a valid session
+  cookie**, because the remaining ~20 Express modules still use the synchronous SQLite helpers.
+  Converting them (Slices 3–9 of the plan) is the remaining majority of the work and is tracked in
+  [docs/POSTGRES_MIGRATION.md](POSTGRES_MIGRATION.md). Nothing was cut over and no deployment
+  changed.
 - **No data was migrated.** There is no SQLite→PostgreSQL copy tool; `server/backup-engine.ts` and
   `server/restore.ts` remain SQLite-only. A PostgreSQL deployment today bootstraps an empty
   workspace.

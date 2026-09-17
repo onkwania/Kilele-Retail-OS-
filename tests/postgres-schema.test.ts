@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import pg from 'pg';
+import { readdirSync } from 'node:fs';
 import { id, now } from '../server/core.js';
 import { closePool, getPool, setPool } from '../server/postgres/db.js';
 import { migrate } from '../server/postgres/migrate.js';
@@ -88,11 +89,13 @@ describePg('PostgreSQL ledger schema and financial protections', () => {
     setPool(null);
 
     const result = await migrate();
-    expect(result.applied).toEqual([
-      '001_initial_schema.sql',
-      '002_integrity_triggers.sql',
-      '003_indexes.sql',
-    ]);
+    // Derived from the migrations directory so the assertion follows the schema instead of
+    // breaking every time a migration is added.
+    const expected = readdirSync('server/postgres/migrations')
+      .filter((file) => file.endsWith('.sql'))
+      .sort();
+    expect(result.applied).toEqual(expected);
+    expect(expected.length).toBeGreaterThanOrEqual(4);
 
     // Every guard must be present before a single row is written.
     const protections = await assertProtections();
@@ -339,7 +342,7 @@ describePg('PostgreSQL ledger schema and financial protections', () => {
         payload_json: JSON.stringify({ total_cents: 5000 }),
         created_at: now(),
       });
-      await tx.insert('user_invites', {
+      await tx.insert('staff_invitations', {
         id: fx.invite,
         business_id: fx.business,
         branch_id: fx.branch,
@@ -400,7 +403,10 @@ describePg('PostgreSQL ledger schema and financial protections', () => {
     it('are recorded with checksums and are not re-applied', async () => {
       const again = await migrate();
       expect(again.applied).toEqual([]);
-      expect(again.skipped.length).toBe(3);
+      // Derived from the migrations directory, so adding a migration cannot break this silently.
+      expect(again.skipped.length).toBe(
+        readdirSync('server/postgres/migrations').filter((file) => file.endsWith('.sql')).length,
+      );
     });
 
     it('install every protection the SQLite ledger enforces', async () => {
@@ -695,7 +701,7 @@ describePg('PostgreSQL ledger schema and financial protections', () => {
       rejected(
         () =>
           transaction((tx) =>
-            tx.exec('UPDATE user_invites SET name = ? WHERE id = ?', 'Changed Name', fx.invite),
+            tx.exec('UPDATE staff_invitations SET name = ? WHERE id = ?', 'Changed Name', fx.invite),
           ),
         'Invitation terms are immutable; revoke and invite again',
       ));
@@ -703,7 +709,7 @@ describePg('PostgreSQL ledger schema and financial protections', () => {
     it('allows revoking a pending invitation, then freezes it', async () => {
       await transaction((tx) =>
         tx.exec(
-          'UPDATE user_invites SET status = ?, closed_at = ?, closed_reason = ? WHERE id = ?',
+          'UPDATE staff_invitations SET status = ?, closed_at = ?, closed_reason = ? WHERE id = ?',
           'revoked',
           now(),
           'No longer joining',
@@ -712,11 +718,13 @@ describePg('PostgreSQL ledger schema and financial protections', () => {
       );
       await rejected(
         () =>
-          transaction((tx) => tx.exec("UPDATE user_invites SET status = 'pending' WHERE id = ?", fx.invite)),
+          transaction((tx) =>
+            tx.exec("UPDATE staff_invitations SET status = 'pending' WHERE id = ?", fx.invite),
+          ),
         'A closed invitation cannot change state',
       );
       await rejected(
-        () => transaction((tx) => tx.exec('DELETE FROM user_invites WHERE id = ?', fx.invite)),
+        () => transaction((tx) => tx.exec('DELETE FROM staff_invitations WHERE id = ?', fx.invite)),
         'Invitations cannot be deleted',
       );
     });
