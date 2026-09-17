@@ -186,8 +186,31 @@ jobs:
       - name: Install Chromium and system libraries
         run: npx playwright install --with-deps chromium
 
+      # Split from `npm run test:e2e` so a failure is attributable: a broken build and a broken
+      # scenario are different problems with different owners.
+      - name: Build production client and server bundles
+        run: npm run build
+
       - name: Browser scenarios
-        run: npm run test:e2e
+        id: scenarios
+        continue-on-error: true
+        run: npx playwright test 2>&1 | tee /tmp/playwright.log
+
+      # Run logs and uploaded artifacts are not reachable from every environment (both are served
+      # from hosts that some sandboxes cannot resolve), so the tail of the Playwright output is
+      # republished as a check annotation, which is readable through the ordinary API. The job
+      # still fails: this only makes the reason visible.
+      - name: Publish the failure summary as a check annotation
+        if: steps.scenarios.outcome == 'failure'
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          log = pathlib.Path('/tmp/playwright.log').read_text(errors='replace').splitlines()
+          tail = '\n'.join(log[-45:])
+          escaped = tail.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+          print(f'::error title=Browser scenarios failed (last 45 lines of output):: {escaped}')
+          PY
+          exit 1
 
       - name: Upload browser evidence
         if: always()
