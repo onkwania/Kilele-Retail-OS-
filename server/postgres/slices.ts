@@ -17,24 +17,50 @@ export const SLICES = [
   'sales',
   'purchases',
   'approvals',
-  'reports',
+  'operations',
 ] as const;
 
 export type Slice = (typeof SLICES)[number];
 
-/** What each slice covers, so an operator reading /api/engine knows what is missing. */
+/**
+ * What each slice covers, in the plan's own words, so an operator reading /api/engine knows what is
+ * missing and which slice will bring it. Two registry entries belong to plan Slice 2 (bootstrap and
+ * authentication) because they were converted together and are separately observable.
+ */
 export const SLICE_SCOPE: Record<Slice, string> = {
-  health: 'startup, connection pool, /api/health',
-  bootstrap: 'workspace bootstrap and environment markers',
-  auth: 'sign-in, sessions, CSRF, lockout, password change',
-  staff: 'staff management, permissions, invitations',
-  products: 'catalogue, pricing and price history',
-  inventory: 'stock engine, movements, counts, wastage',
-  sales: 'POS sales, tenders, receipts, cash sessions',
-  purchases: 'purchases, receipts, supplier payments, expenses',
-  approvals: 'approval requests, decisions and reversals',
-  reports: 'reports, analytics, exports and integrity API',
+  health: 'Slice 1 - connection, health, migrations, guard verification',
+  bootstrap: 'Slice 2 - one-time workspace bootstrap and environment provenance',
+  auth: 'Slice 2 - authentication, sessions, CSRF and lockout',
+  staff: 'Slice 3 - staff, roles, permissions and tenant scope',
+  products: 'Slice 4 - products, catalogue, pricing and barcodes',
+  inventory: 'Slice 5 - inventory, stock locking and weighted-average costing',
+  sales: 'Slice 6 - POS sales, payments, journals, receipts and idempotency',
+  purchases: 'Slice 7 - purchases, expenses and reconciliation',
+  approvals: 'Slice 8 - approvals, reversals, reports and analytics',
+  operations: 'Slice 9 - documents, backups, restore and production operations',
 };
+
+/** The plan's slice number, so progress can be read against the migration plan directly. */
+export const SLICE_PLAN: Record<Slice, number> = {
+  health: 1,
+  bootstrap: 2,
+  auth: 2,
+  staff: 3,
+  products: 4,
+  inventory: 5,
+  sales: 6,
+  purchases: 7,
+  approvals: 8,
+  operations: 9,
+};
+
+/** Which plan slice is next, and what it covers. */
+export function nextSlice(): { slice: Slice; plan: number; scope: string } | null {
+  const pending = pendingSlices();
+  if (!pending.length) return null;
+  const first = pending[0];
+  return { slice: first.slice, plan: SLICE_PLAN[first.slice], scope: first.scope };
+}
 
 const converted = new Set<string>();
 
