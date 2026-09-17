@@ -2,15 +2,14 @@ import Database from 'better-sqlite3';
 import { migrateExisting, needsMigration } from './migrations.js';
 import { readFileSync, mkdirSync, existsSync, writeFileSync, chmodSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { scryptSync, randomBytes } from 'node:crypto';
 import { all, audit, id, insert, now, one, type DB, type Actor } from './core.js';
+import { assertEngineUsable } from './postgres/db.js';
 import { PERMISSIONS, ROLE_NAMES, ROLE_PERMISSIONS } from './permissions.js';
 
-export const SCRYPT_OPTIONS = { N: 131072, r: 8, p: 1, maxmem: 256 * 1024 * 1024 };
-export function hashPassword(password: string) {
-  const salt = randomBytes(16).toString('hex');
-  return `scrypt-v2:${salt}:${scryptSync(password, salt, 64, SCRYPT_OPTIONS).toString('hex')}`;
-}
+// Password hashing lives in server/passwords.ts so the PostgreSQL data layer can reuse it
+// without importing better-sqlite3. Re-exported here: every existing call site is unchanged.
+export { SCRYPT_OPTIONS, hashPassword } from './passwords.js';
+import { hashPassword } from './passwords.js';
 const immutable = [
   'environment_markers',
   'purchase_reversals',
@@ -39,6 +38,10 @@ const immutable = [
   'idempotency_keys',
 ];
 export function createDb(path = ':memory:') {
+  // Single choke point for every SQLite entrypoint (API, bootstrap, check, backup, restore,
+  // catalogue update). With DATABASE_ENGINE=postgres this throws instead of quietly opening the
+  // SQLite file, so a deployment can never serve one ledger while claiming to run on another.
+  assertEngineUsable('SQLite data layer');
   if (path !== ':memory:') {
     const file = resolve(path);
     mkdirSync(dirname(file), { recursive: true, mode: 0o700 });

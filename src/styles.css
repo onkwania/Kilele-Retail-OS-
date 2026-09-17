@@ -845,6 +845,8 @@ button::-moz-focus-inner {
 .header-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 10px;
 }
 .today-label {
@@ -2848,6 +2850,71 @@ button::-moz-focus-inner {
   font-style: normal;
   margin: 0 8px;
 }
+/* An invitation link is opened by somebody with no account yet: one purpose, no workspace chrome. */
+.login-page.solo {
+  grid-template-columns: minmax(0, 1fr);
+  background: var(--surface);
+}
+.login-page.solo .login-form-side {
+  padding: 46px 20px;
+}
+.login-page.solo .login-form-card {
+  width: 430px;
+  padding: 30px 30px 22px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: 0 26px 50px -36px rgba(32, 62, 46, 0.55);
+}
+.invite-summary {
+  display: grid;
+  gap: 9px;
+  padding: 14px 16px;
+  margin-bottom: 22px;
+  background: var(--sage);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+.invite-summary > div {
+  display: flex;
+  gap: 14px;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 12px;
+}
+.invite-summary small {
+  color: var(--muted);
+  flex: none;
+}
+.invite-summary strong {
+  font-weight: 600;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.invite-link {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.invite-link .input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+.invite-link .btn {
+  flex: none;
+  width: auto;
+  margin-top: 0;
+}
+.invite-footer {
+  display: flex;
+  justify-content: center;
+  margin-top: 26px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+.invite-footer .logo {
+  transform: scale(0.82);
+}
 .boot {
   height: 100vh;
   display: flex;
@@ -4442,8 +4509,109 @@ button::-moz-focus-inner {
 .cart-customer > span {
   flex: 1;
 }
+.cart-customer > .cart-customer-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* A badge is a pill, not a stretched band: keep it at its natural width. */
+.cart-customer > .badge {
+  flex: 0 0 auto;
+}
 .cart-customer .badge {
   font-size: 9.5px;
+}
+/* The customer row is an action, so it is a real button with the same resting appearance. */
+.cart-customer-action {
+  width: 100%;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid #edf3e3;
+  text-align: left;
+  font-size: 11px;
+}
+.cart-customer-action:hover {
+  background: #f7faf1;
+}
+.customer-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.customer-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-height: 60px;
+  max-height: 290px;
+  overflow-y: auto;
+}
+.customer-option {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 11px 13px;
+  background: #fbfcf8;
+  border: 1px solid #e7efdc;
+  border-radius: 9px;
+  text-align: left;
+  color: #5d6b4f;
+}
+.customer-option:hover {
+  background: #f6faf0;
+  border-color: #cdddc0;
+}
+.customer-option.active {
+  background: #f2f8ea;
+  border-color: #9dbb8c;
+  color: #3d5a34;
+}
+.customer-option > svg {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: #5c7948;
+}
+.customer-avatar {
+  display: grid;
+  place-content: center;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: #edf3e6;
+  color: #5f7a49;
+  font-size: 10.5px;
+  font-weight: 650;
+}
+.customer-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+.customer-identity strong {
+  font-size: 12px;
+  font-weight: 550;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.customer-identity small {
+  font-size: 10px;
+  color: #7b8770;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.customer-new {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-top: 16px;
+  border-top: 1px solid #edf3e3;
 }
 .cart-lines {
   flex: 1;

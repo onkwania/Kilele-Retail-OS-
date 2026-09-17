@@ -2,6 +2,8 @@
 
 181 requirement/control rows. “Verified” refers to the cited engineering tests, not physical device certification, provider settlement or tax/legal compliance. External P1 gates remain open.
 
+> **Dated second-pass evidence.** Test and scenario counts cited in this matrix are the ones recorded on 2026-09-05 and are left as written. The executed suite has since grown — see [GAP_AUDIT.md](GAP_AUDIT.md) for current counts and for the customer-attachment capability that this matrix records as backend-only.
+
 [Download CSV](REQUIREMENTS_MATRIX.csv) · [Audit and closure report](SECOND_PASS_AUDIT.md) · [Execution evidence](SECOND_PASS_VERIFICATION.json)
 
 | Requirement                                                                          | Existing                     | Verified                                                                                               | Gap                                                                                            | Action                                                                                                                   | Status                                                 |

@@ -181,7 +181,7 @@ export default function Login() {
               <Button type="submit" busy={a.busy}>
                 Sign in to workspace <ArrowRight size={16} />
               </Button>
-              <p className="login-help">Need access? Ask your administrator to create a staff account.</p>
+              <p className="login-help">Need access? Ask your administrator to send you an invitation.</p>
             </form>
           )}
           {auth.preview && !mustChange && (

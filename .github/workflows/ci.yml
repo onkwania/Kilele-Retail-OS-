@@ -1,0 +1,224 @@
+# Continuous verification for Kilele Retail OS.
+#
+# The documentation treats "every requested command was run afresh" as the acceptance method.
+# This workflow makes that reproducible instead of manual: no commit reaches `main` without the
+# automated suite, TypeScript, ESLint, Prettier, the production build and the Pages output guard.
+#
+# It deliberately does NOT claim the external gates are closed. KRA eTIMS certification, real
+# payment-provider settlement, physical scanner/printer/drawer acceptance and target-host recovery
+# drills cannot be executed by a runner and remain documented manual dependencies
+# (see docs/HARDWARE_ACCEPTANCE.md and docs/SECOND_PASS_AUDIT.md).
+
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # Superseded branch/PR runs are cancelled; a run against main always finishes so the recorded
+  # evidence for the protected branch is never truncated.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  verify:
+    name: Test, typecheck, lint, format and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Pinned by the repository, not by a runner default.
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Automated API, client and unit tests
+        run: npm run test
+
+      - name: TypeScript (strict, no emit)
+        run: npm run typecheck
+
+      - name: ESLint (including react-hooks)
+        run: npm run lint
+
+      - name: Prettier formatting
+        run: npm run format:check
+
+      - name: Production build (client + compiled server/CLI bundles)
+        run: npm run build
+
+      - name: Cloudflare Pages output guard
+        run: npm run check:pages
+
+      - name: Runtime dependency advisories
+        run: npm audit --omit=dev
+
+      - name: Upload compiled client
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-build
+          path: dist/client
+          if-no-files-found: error
+          retention-days: 7
+
+  postgres:
+    name: PostgreSQL schema, triggers and ledger checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # A real PostgreSQL server, not a mock: the whole point of this job is to prove that the
+    # financial protections in server/postgres/migrations actually reject bad writes.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: kilele
+          POSTGRES_PASSWORD: ci-only-not-a-secret
+          POSTGRES_DB: kilele
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kilele -d kilele"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://kilele:ci-only-not-a-secret@127.0.0.1:5432/kilele
+      # A missing database must fail this job, never silently skip the suite.
+      REQUIRE_POSTGRES_TESTS: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Connection round trip
+        run: npm run db:pg:ping
+
+      - name: Apply migrations from Git
+        run: npm run db:pg:migrate
+
+      - name: Re-running migrations changes nothing
+        run: |
+          npm run db:pg:migrate > /tmp/migrate-again.json
+          grep -q '"applied": \[\]' /tmp/migrate-again.json
+
+      - name: Every financial protection is installed
+        run: npm run db:pg:protections
+
+      - name: Behavioural trigger, transaction and ledger-check suite
+        run: npm run db:pg:test
+
+      # Slice 1 evidence at the process level: the PostgreSQL API boots only after the migrations
+      # and the guard triggers are verified, answers health, and refuses every unconverted route.
+      - name: PostgreSQL API boots and fails closed on unconverted routes
+        run: |
+          # tsx, not dist: this job does not build the client, and the API must boot from source.
+          # PREVIEW_MODE=true so startup creates its own throwaway owner and Slice 2 can sign in.
+          DATABASE_ENGINE=postgres PREVIEW_MODE=true PORT=3999 npx tsx server/index.ts > /tmp/pg-server.log 2>&1 &
+          SERVER_PID=$!
+          for _ in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:3999/api/health > /tmp/pg-health.json 2>/dev/null && break
+            sleep 0.5
+          done
+          # An unconverted route must refuse loudly, never answer 404 or an empty success.
+          curl -s -o /tmp/pg-sales.json -w '%{http_code}' http://127.0.0.1:3999/api/sales > /tmp/pg-sales.code || true
+          # npx spawns node as a child; kill both so the runner does not carry a live listener.
+          pkill -P "$SERVER_PID" 2>/dev/null || true
+          kill "$SERVER_PID" 2>/dev/null || true
+          sleep 1
+          cat /tmp/pg-server.log
+          grep -q 'guard triggers verified' /tmp/pg-server.log
+          grep -q '"database":"available"' /tmp/pg-health.json
+          grep -q '"engine":"postgres"' /tmp/pg-health.json
+          [ "$(cat /tmp/pg-sales.code)" = "503" ]
+          grep -q '"code":"NOT_MIGRATED"' /tmp/pg-sales.json
+          # Slice 2: authentication works, and being authenticated still does not open a money route.
+          curl -s -c /tmp/pg-cookies.txt -o /tmp/pg-preview.json -w '%{http_code}' \
+            -X POST http://127.0.0.1:3999/api/auth/preview > /tmp/pg-preview.code
+          [ "$(cat /tmp/pg-preview.code)" = "200" ]
+          grep -q '"csrf"' /tmp/pg-preview.json
+          grep -q 'kilele_session' /tmp/pg-cookies.txt
+          curl -s -b /tmp/pg-cookies.txt -o /tmp/pg-sales-auth.json -w '%{http_code}' \
+            http://127.0.0.1:3999/api/sales > /tmp/pg-sales-auth.code
+          [ "$(cat /tmp/pg-sales-auth.code)" = "503" ]
+          grep -q '"code":"NOT_MIGRATED"' /tmp/pg-sales-auth.json
+          # The PostgreSQL engine must not open or create a SQLite ledger file.
+          test -z "$(ls data/*.sqlite data/*.sqlite-wal data/*.sqlite-shm 2>/dev/null)"
+
+      - name: Ledger integrity report
+        run: npm run db:pg:check
+
+  browser:
+    name: Real-browser acceptance scenarios
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: verify
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The suite drives the production-built client over real local HTTPS with disposable
+      # in-memory databases. It never touches data/kilele.sqlite or any business record.
+      - name: Install Chromium and system libraries
+        run: npx playwright install --with-deps chromium
+
+      # Split from `npm run test:e2e` so a failure is attributable: a broken build and a broken
+      # scenario are different problems with different owners.
+      - name: Build production client and server bundles
+        run: npm run build
+
+      - name: Browser scenarios
+        id: scenarios
+        continue-on-error: true
+        run: npx playwright test 2>&1 | tee /tmp/playwright.log
+
+      # Run logs and uploaded artifacts are not reachable from every environment (both are served
+      # from hosts that some sandboxes cannot resolve), so the tail of the Playwright output is
+      # republished as a check annotation, which is readable through the ordinary API. The job
+      # still fails: this only makes the reason visible.
+      - name: Publish the failure summary as a check annotation
+        if: steps.scenarios.outcome == 'failure'
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          log = pathlib.Path('/tmp/playwright.log').read_text(errors='replace').splitlines()
+          tail = '\n'.join(log[-45:])
+          escaped = tail.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+          print(f'::error title=Browser scenarios failed (last 45 lines of output):: {escaped}')
+          PY
+          exit 1
+
+      - name: Upload browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 7

@@ -1,9 +1,27 @@
-import type { Request, Response, NextFunction, Express } from 'express';
-import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+import type { Request, Response, Express } from 'express';
+import { randomBytes } from 'node:crypto';
 import { rateLimit } from 'express-rate-limit';
-import { z } from 'zod';
-import { type Actor, type DB, AppError, audit, now, one, sha, requireThat, demand } from './core.js';
-import { actorFor, hashPassword, SCRYPT_OPTIONS } from './db.js';
+import { type Actor, type DB, AppError, audit, now, one, sha, requireThat } from './core.js';
+import { actorFor, hashPassword } from './db.js';
+import {
+  ATTEMPT_RETENTION_MS,
+  AUTH_WINDOW_MS,
+  DUMMY_HASH,
+  LOCKOUT_FAILURES,
+  LOCKOUT_MS,
+  LOGIN_ATTEMPT_LIMIT,
+  PASSWORD_ATTEMPT_LIMIT,
+  SESSION_COOKIE,
+  SESSION_TTL_MS,
+  expiresAt,
+  loginBody,
+  passwordChangeBody,
+  protect,
+  rejectUnsafeWrite,
+  sessionCookieOptions,
+  verifyPassword,
+  type SessionCookie,
+} from './auth-shared.js';
 
 declare module 'express-serve-static-core' {
   interface Request {
@@ -12,63 +30,58 @@ declare module 'express-serve-static-core' {
     sessionHash: string;
   }
 }
-const DUMMY_HASH = hashPassword('dummy-password-not-used');
-export function verifyPassword(password: string, stored: string) {
-  const modern = typeof stored === 'string' && /^scrypt-v2:[a-f0-9]{32}:[a-f0-9]{128}$/.test(stored);
-  const legacy = typeof stored === 'string' && /^[a-f0-9]{32}:[a-f0-9]{128}$/.test(stored);
-  const parts = (modern || legacy ? stored : DUMMY_HASH).split(':');
-  const salt = parts[parts.length - 2],
-    key = parts[parts.length - 1];
-  const computed = scryptSync(password, salt, 64, legacy ? { N: 16384, r: 8, p: 1 } : SCRYPT_OPTIONS);
-  return (modern || legacy) && timingSafeEqual(Buffer.from(key, 'hex'), computed);
+
+/**
+ * Authentication on the SQLite ledger.
+ *
+ * Everything that is a security decision rather than a storage decision - password verification,
+ * the cookie policy, the CSRF/origin gate, the lockout thresholds and `protect()` - lives in
+ * server/auth-shared.ts and is re-exported here, so every existing call site keeps importing from
+ * server/auth.js while the PostgreSQL surface (server/postgres/auth.ts) uses the same code.
+ */
+export { protect, verifyPassword, sessionCookieOptions, DUMMY_HASH };
+export type { SessionCookie };
+
+/** Issue one 12-hour session for an already-authenticated user. Shared by password sign-in, password
+ * change and invitation acceptance so every entry point enforces identical session hygiene. */
+export function issueSession(
+  db: DB,
+  req: Request,
+  res: Response,
+  userId: string,
+  cookieOptions: SessionCookie,
+) {
+  db.prepare('DELETE FROM auth_sessions WHERE expires_at<=?').run(now());
+  db.prepare('DELETE FROM login_attempts WHERE updated_at<?').run(
+    new Date(Date.now() - ATTEMPT_RETENTION_MS).toISOString(),
+  );
+  if (req.sessionHash) db.prepare('DELETE FROM auth_sessions WHERE token_hash=?').run(req.sessionHash);
+  const token = randomBytes(32).toString('hex'),
+    csrf = randomBytes(32).toString('hex');
+  db.prepare('INSERT INTO auth_sessions VALUES(?,?,?,?,?,?,?)').run(
+    sha(token),
+    userId,
+    csrf,
+    expiresAt(SESSION_TTL_MS),
+    now(),
+    req.ip ?? '',
+    String(req.headers['user-agent'] ?? '').slice(0, 300),
+  );
+  res.cookie(SESSION_COOKIE, token, cookieOptions);
+  return csrf;
 }
-export function protect(permission?: string) {
-  return (req: Request, _res: Response, next: NextFunction) => {
-    if (!req.actor) return next(new AppError(401, 'Please sign in to continue.', 'UNAUTHENTICATED'));
-    if (req.actor.must_change_password)
-      return next(
-        new AppError(403, 'Change your temporary password before continuing.', 'PASSWORD_CHANGE_REQUIRED'),
-      );
-    if (permission) demand(req.actor, permission);
-    next();
-  };
-}
+
 export function installAuth(
   app: Express,
   db: DB,
   options: { preview: boolean; production: boolean; origin?: string },
 ) {
-  // Isolated embedded previews need a secure partitioned cookie; production remains first-party SameSite=Strict.
-  const cookieOptions = {
-    httpOnly: true,
-    secure: options.production || options.preview,
-    sameSite: options.preview ? ('none' as const) : ('strict' as const),
-    partitioned: options.preview,
-    path: '/',
-    maxAge: 12 * 3600_000,
-  };
+  const cookieOptions = sessionCookieOptions(options);
   function newSession(req: Request, res: Response, userId: string) {
-    db.prepare('DELETE FROM auth_sessions WHERE expires_at<=?').run(now());
-    db.prepare('DELETE FROM login_attempts WHERE updated_at<?').run(
-      new Date(Date.now() - 30 * 86400000).toISOString(),
-    );
-    if (req.sessionHash) db.prepare('DELETE FROM auth_sessions WHERE token_hash=?').run(req.sessionHash);
-    const token = randomBytes(32).toString('hex'),
-      csrf = randomBytes(32).toString('hex');
-    db.prepare('INSERT INTO auth_sessions VALUES(?,?,?,?,?,?,?)').run(
-      sha(token),
-      userId,
-      csrf,
-      new Date(Date.now() + 12 * 3600_000).toISOString(),
-      now(),
-      req.ip ?? '',
-      String(req.headers['user-agent'] ?? '').slice(0, 300),
-    );
-    res.cookie('kilele_session', token, cookieOptions);
-    return csrf;
+    return issueSession(db, req, res, userId, cookieOptions);
   }
   app.use('/api', (req, _res, next) => {
-    const token = req.cookies?.kilele_session;
+    const token = req.cookies?.[SESSION_COOKIE];
     if (typeof token === 'string') {
       const row = one(
         db,
@@ -85,33 +98,8 @@ export function installAuth(
         }
       }
     }
-    if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
-      const origin = req.headers.origin;
-      if (origin) {
-        let allowed = origin === options.origin;
-        if (!options.production) {
-          try {
-            const u = new URL(origin);
-            allowed ||=
-              u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname.endsWith('.e2b.app');
-          } catch {
-            /* fail closed */
-          }
-        }
-        if (!allowed) return next(new AppError(403, 'Request origin is not allowed.', 'CSRF_REJECTED'));
-      }
-      if (req.headers['sec-fetch-site'] === 'cross-site')
-        return next(new AppError(403, 'Cross-site request blocked.'));
-      if (
-        req.actor &&
-        req.path !== '/auth/login' &&
-        req.path !== '/auth/preview' &&
-        req.headers['x-csrf-token'] !== req.csrf
-      )
-        return next(
-          new AppError(403, 'Security token is missing or expired. Refresh and try again.', 'CSRF_REJECTED'),
-        );
-    }
+    const rejection = rejectUnsafeWrite(req, options);
+    if (rejection) return next(rejection);
     next();
   });
   app.get('/api/auth/me', (req, res) => {
@@ -124,17 +112,14 @@ export function installAuth(
     });
   });
   const loginLimit = rateLimit({
-    windowMs: 15 * 60_000,
-    limit: 20,
+    windowMs: AUTH_WINDOW_MS,
+    limit: LOGIN_ATTEMPT_LIMIT,
     standardHeaders: 'draft-7',
     legacyHeaders: false,
     message: { error: 'Too many sign-in attempts. Try again in 15 minutes.' },
   });
   app.post('/api/auth/login', loginLimit, (req, res) => {
-    const body = z
-      .object({ email: z.string().email().max(200), password: z.string().min(1).max(200) })
-      .strict()
-      .parse(req.body);
+    const body = loginBody.parse(req.body);
     const email = body.email.toLowerCase();
     const attempt = one(db, 'SELECT * FROM login_attempts WHERE email=?', email);
     requireThat(
@@ -146,12 +131,12 @@ export function installAuth(
     if (!verifyPassword(body.password, user?.password_hash ?? DUMMY_HASH) || !user) {
       const expired =
         attempt &&
-        (Date.parse(attempt.updated_at) + 15 * 60_000 <= Date.now() ||
+        (Date.parse(attempt.updated_at) + AUTH_WINDOW_MS <= Date.now() ||
           (attempt.locked_until && attempt.locked_until <= now()));
       const failures = (expired ? 0 : (attempt?.failures ?? 0)) + 1;
       db.prepare(
         'INSERT INTO login_attempts VALUES(?,?,?,?) ON CONFLICT(email) DO UPDATE SET failures=excluded.failures,locked_until=excluded.locked_until,updated_at=excluded.updated_at',
-      ).run(email, failures, failures >= 5 ? new Date(Date.now() + 15 * 60_000).toISOString() : null, now());
+      ).run(email, failures, failures >= LOCKOUT_FAILURES ? expiresAt(LOCKOUT_MS) : null, now());
       if (user)
         audit(
           db,
@@ -216,21 +201,18 @@ export function installAuth(
       db.prepare('DELETE FROM auth_sessions WHERE token_hash=?').run(req.sessionHash);
       audit(db, req.actor, 'auth.logout', 'users', req.actor.id, null, null, 'User signed out');
     }
-    res.clearCookie('kilele_session', { ...cookieOptions, maxAge: undefined }).json({ ok: true });
+    res.clearCookie(SESSION_COOKIE, { ...cookieOptions, maxAge: undefined }).json({ ok: true });
   });
   const passwordLimit = rateLimit({
-    windowMs: 15 * 60_000,
-    limit: 10,
+    windowMs: AUTH_WINDOW_MS,
+    limit: PASSWORD_ATTEMPT_LIMIT,
     standardHeaders: 'draft-7',
     legacyHeaders: false,
     message: { error: 'Too many password-change attempts. Try again later.' },
   });
   app.post('/api/auth/password', passwordLimit, (req, res) => {
     requireThat(req.actor, 'Sign in first.', 401);
-    const body = z
-      .object({ current: z.string().max(200), password: z.string().min(12).max(200) })
-      .strict()
-      .parse(req.body);
+    const body = passwordChangeBody.parse(req.body);
     const user = one(db, 'SELECT * FROM users WHERE id=?', req.actor.id)!;
     requireThat(verifyPassword(body.current, user.password_hash), 'Current password is incorrect.', 400);
     requireThat(body.current !== body.password, 'Choose a different password.');

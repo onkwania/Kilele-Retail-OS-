@@ -58,7 +58,8 @@ export function SaleDetail({
                 <small>TRANSACTION REFERENCE</small>
                 <h3>{q.data.sale.ref}</h3>
                 <p>
-                  {dateLabel(q.data.sale.created_at, true)} · {q.data.sale.staff_name}
+                  {dateLabel(q.data.sale.created_at, true)} · {q.data.sale.staff_name} ·{' '}
+                  {q.data.sale.customer_name ?? 'Walk-in sale'}
                 </p>
               </div>
               <Badge tone="green" dot>
@@ -205,7 +206,7 @@ export default function Sales() {
   const current = q.data?.today ?? { transactions: 0, original_cents: 0, net_collections_cents: 0 };
   const filtered = sales.filter(
     (s) =>
-      `${s.ref} ${s.staff_name}`.toLowerCase().includes(search.toLowerCase()) &&
+      `${s.ref} ${s.staff_name} ${s.customer_name ?? ''}`.toLowerCase().includes(search.toLowerCase()) &&
       (!method || s.payment_methods?.includes(method)) &&
       (!status ||
         (status === 'completed' && s.return_status === 'completed') ||
@@ -267,7 +268,7 @@ export default function Sales() {
             <SearchBox
               value={search}
               onChange={setSearch}
-              placeholder="Find a transaction or staff member…"
+              placeholder="Find a transaction, customer or staff member…"
             />
           </div>
           <div className="toolbar-right">
@@ -319,7 +320,10 @@ export default function Sales() {
                     <tr className="clickable" key={s.id} onClick={() => setSelected(s.id)}>
                       <td>
                         <strong className="mono">{s.ref}</strong>
-                        <small className="cell-sub">{dateLabel(s.created_at, true)}</small>
+                        <small className="cell-sub">
+                          {dateLabel(s.created_at, true)}
+                          {s.customer_name ? ` · ${s.customer_name}` : ''}
+                        </small>
                       </td>
                       <td>{s.staff_name}</td>
                       <td>{s.item_count} lines</td>

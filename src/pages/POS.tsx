@@ -20,6 +20,7 @@ import {
   Printer,
   ShieldCheck,
   UserRound,
+  UserPlus,
   SlidersHorizontal,
   Tag,
   Package,
@@ -35,6 +36,7 @@ import {
   numeric,
   minor,
   dateLabel,
+  initials,
   isReady,
   getPendingSale,
   resolveScan,
@@ -187,6 +189,7 @@ function PaymentModal({
   cart,
   quote,
   sessionId,
+  customerId,
   discount,
   discountReason,
   onClose,
@@ -195,6 +198,7 @@ function PaymentModal({
   cart: CartLine[];
   quote: Row;
   sessionId: string;
+  customerId: string | null;
   discount: string;
   discountReason: string;
   onClose: () => void;
@@ -258,6 +262,8 @@ function PaymentModal({
               key: key.current,
               body: {
                 session_id: sessionId,
+                // Omitted entirely for a walk-in sale, so an unattached checkout keeps its exact body.
+                ...(customerId ? { customer_id: customerId } : {}),
                 items: cart,
                 discount: discount || '0',
                 discount_reason: discountReason,
@@ -473,6 +479,161 @@ function PaymentModal({
     </Modal>
   );
 }
+export type CustomerQuery = {
+  data: { customers: Row[] } | null;
+  loading: boolean;
+  error: string;
+  refresh: () => void;
+};
+/**
+ * Customer master data, per-sale attachment and the customer_id foreign key already existed on the
+ * server, but nothing in the workspace could reach them. This attaches a recorded customer to the
+ * sale in progress. It deliberately does not open a credit account, a customer balance or an
+ * outstanding-debt ledger: Kilele records a manually confirmed payment, it never extends credit.
+ */
+export function CustomerModal({
+  query,
+  selected,
+  onChoose,
+  onClose,
+}: {
+  query: CustomerQuery;
+  selected: Row | null;
+  onChoose: (customer: Row | null) => void;
+  onClose: () => void;
+}) {
+  const a = useAction();
+  const [search, setSearch] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [form, setForm] = useState({ name: '', phone: '', email: '' });
+  const customers = query.data?.customers ?? [];
+  const term = search.trim().toLowerCase();
+  const matches = term
+    ? customers.filter((c) => `${c.name} ${c.phone} ${c.email}`.toLowerCase().includes(term))
+    : customers;
+  const choose = (customer: Row | null) => {
+    onChoose(customer);
+    onClose();
+  };
+  const option = (active: boolean) => `customer-option${active ? ' active' : ''}`;
+  return (
+    <Modal
+      title="Who is buying?"
+      description="Attach a recorded customer to this sale, or continue as a walk-in."
+      onClose={onClose}
+    >
+      <div className="customer-pick">
+        <button type="button" className={option(!selected)} onClick={() => choose(null)}>
+          <span className="customer-avatar">
+            <UserRound size={15} />
+          </span>
+          <span className="customer-identity">
+            <strong>Walk-in customer</strong>
+            <small>No customer record is attached to this sale.</small>
+          </span>
+          {!selected && <Check size={14} />}
+        </button>
+        <SearchBox value={search} onChange={setSearch} placeholder="Search a customer name or phone…" />
+        {query.loading ? (
+          <Loading />
+        ) : query.error ? (
+          <ErrorState error={query.error} retry={query.refresh} />
+        ) : (
+          <div className="customer-list">
+            {matches.map((c) => (
+              <button
+                type="button"
+                key={c.id}
+                className={option(selected?.id === c.id)}
+                onClick={() => choose(c)}
+              >
+                <span className="customer-avatar">{initials(c.name)}</span>
+                <span className="customer-identity">
+                  <strong>{c.name}</strong>
+                  <small>
+                    {[c.phone, c.email].filter(Boolean).join(' · ') || 'No contact details recorded'}
+                  </small>
+                </span>
+                {selected?.id === c.id && <Check size={14} />}
+              </button>
+            ))}
+            {!matches.length && (
+              <Empty
+                compact
+                icon={<UserRound size={22} />}
+                title={customers.length ? 'No matching customer' : 'No customer records yet'}
+                description="Add the person below, or continue as a walk-in sale."
+              />
+            )}
+          </div>
+        )}
+        {adding ? (
+          <form
+            className="customer-new"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void a.run(async () => {
+                const result = await api<{ customer: Row }>('/customers', {
+                  method: 'POST',
+                  body: form,
+                });
+                query.refresh();
+                onChoose(result.customer);
+                onClose();
+              }, 'Customer record created.');
+            }}
+          >
+            <Field label="Customer name" required>
+              <Input
+                value={form.name}
+                required
+                minLength={2}
+                maxLength={150}
+                autoFocus
+                placeholder="Name as the customer gives it"
+                onChange={(e) => setForm((s) => ({ ...s, name: e.target.value }))}
+              />
+            </Field>
+            <div className="grid-2">
+              <Field label="Phone">
+                <Input
+                  value={form.phone}
+                  maxLength={40}
+                  placeholder="+254…"
+                  onChange={(e) => setForm((s) => ({ ...s, phone: e.target.value }))}
+                />
+              </Field>
+              <Field label="Email">
+                <Input
+                  value={form.email}
+                  type="email"
+                  placeholder="Optional"
+                  onChange={(e) => setForm((s) => ({ ...s, email: e.target.value }))}
+                />
+              </Field>
+            </div>
+            {a.error && <Notice tone="error">{a.error}</Notice>}
+            <div className="form-footer">
+              <Button variant="secondary" type="button" onClick={() => setAdding(false)}>
+                Cancel
+              </Button>
+              <Button busy={a.busy} type="submit">
+                Save and attach
+              </Button>
+            </div>
+          </form>
+        ) : (
+          <div className="form-footer">
+            <Button variant="secondary" onClick={() => setAdding(true)}>
+              <UserPlus size={15} />
+              Add a new customer
+            </Button>
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
 export default function POS() {
   const [pending, setPending] = useState(getPendingSale),
     [recover, setRecover] = useState(false);
@@ -485,7 +646,8 @@ export default function POS() {
     navigate = useNavigate(),
     toast = useToast();
   const productsQ = useQuery<{ products: Product[] }>('/products'),
-    sessionQ = useQuery('/workspace/summary');
+    sessionQ = useQuery('/workspace/summary'),
+    customersQ = useQuery<{ customers: Row[] }>('/customers');
   const [search, setSearch] = useState(''),
     [category, setCategory] = useState('All'),
     [onlyReady, setOnlyReady] = useState(false),
@@ -499,6 +661,8 @@ export default function POS() {
     [sessionForm, setSessionForm] = useState(false),
     [payment, setPayment] = useState(false),
     [receipt, setReceipt] = useState<string | null>(null),
+    [customer, setCustomer] = useState<Row | null>(null),
+    [pickCustomer, setPickCustomer] = useState(false),
     [clear, setClear] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const products = productsQ.data?.products ?? [],
@@ -757,11 +921,15 @@ export default function POS() {
               <Trash2 size={15} />
             </IconButton>
           </header>
-          <div className="cart-customer">
+          <button
+            type="button"
+            className="cart-customer cart-customer-action"
+            onClick={() => setPickCustomer(true)}
+          >
             <UserRound size={16} />
-            <span>Walk-in customer</span>
-            <Badge>Retail</Badge>
-          </div>
+            <span className="cart-customer-name">{customer ? customer.name : 'Walk-in customer'}</span>
+            <Badge tone={customer ? 'green' : 'neutral'}>{customer ? 'Attached' : 'Retail'}</Badge>
+          </button>
           <div className="cart-lines">
             {!cart.length ? (
               <div className="cart-empty">
@@ -935,6 +1103,7 @@ export default function POS() {
           cart={cart}
           quote={quote}
           sessionId={session.id}
+          customerId={customer?.id ?? null}
           discount={discount}
           discountReason={discountReason}
           onClose={() => setPayment(false)}
@@ -942,12 +1111,21 @@ export default function POS() {
             setPayment(false);
             setReceipt(id);
             setCart([]);
+            setCustomer(null);
             setDiscount('0');
             setDiscountReason('');
             setShowDiscount(false);
             productsQ.refresh();
             sessionQ.refresh();
           }}
+        />
+      )}
+      {pickCustomer && (
+        <CustomerModal
+          query={customersQ}
+          selected={customer}
+          onChoose={setCustomer}
+          onClose={() => setPickCustomer(false)}
         />
       )}
       {pending && recover && (
@@ -958,6 +1136,7 @@ export default function POS() {
             setRecover(false);
             setPayment(false);
             setCart([]);
+            setCustomer(null);
             productsQ.refresh();
             sessionQ.refresh();
           }}
@@ -965,6 +1144,7 @@ export default function POS() {
             setRecover(false);
             setPayment(false);
             setCart([]);
+            setCustomer(null);
             setDiscount('');
             setDiscountReason('');
             setReceipt(id);
@@ -995,6 +1175,7 @@ export default function POS() {
             <Button
               onClick={() => {
                 setCart([]);
+                setCustomer(null);
                 setDiscount('0');
                 setDiscountReason('');
                 setClear(false);

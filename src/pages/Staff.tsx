@@ -9,6 +9,11 @@ import {
   ArrowUpRight,
   Eye,
   EyeOff,
+  Mail,
+  Copy,
+  Clock,
+  Ban,
+  Send,
 } from 'lucide-react';
 import { api, type Row, money, initials, roleName, today, daysAgo, queryString } from '../lib/api';
 import { useQuery, useAuth, useAction } from '../lib/state';
@@ -147,6 +152,244 @@ function StaffForm({ user, onClose, onSaved }: { user?: Row; onClose: () => void
     </Modal>
   );
 }
+/** Plain-language description of what each role may actually do, shown while assigning people. */
+const ROLE_HINTS: Record<string, string> = {
+  cashier: 'Employee — sells during an assigned register session and submits correction requests.',
+  inventory: 'Employee — receives stock, enters counts and wastage, and submits them for approval.',
+  accountant: 'Finance — records expenses and purchases and reads financial reports. No staff control.',
+  admin: 'Supervisor — approves corrections and daily closings, manages staff, prices and settings.',
+  super_admin: 'Owner level — everything a supervisor can do, plus managing other administrators.',
+};
+const INVITE_ROLES = ['cashier', 'inventory', 'accountant', 'admin', 'super_admin'];
+function InviteForm({
+  preset,
+  onClose,
+  onInvited,
+}: {
+  preset?: Row;
+  onClose: () => void;
+  onInvited: (invite: Row) => void;
+}) {
+  const auth = useAuth(),
+    a = useAction();
+  const [form, setForm] = useState({
+    name: preset?.name ?? '',
+    email: preset?.email ?? '',
+    role_id: preset?.role_id ?? 'cashier',
+    reports_access: true,
+    reason: preset?.reason ?? '',
+  });
+  const set = (k: string, v: unknown) => setForm((old) => ({ ...old, [k]: v }));
+  const roles = INVITE_ROLES.filter(
+    (r) => auth.user!.role_id === 'super_admin' || !['admin', 'super_admin'].includes(r),
+  );
+  return (
+    <Modal
+      title={preset ? `Send ${preset.name} a fresh link` : 'Invite a team member'}
+      description="They open a private link and choose their own password. You never see or set it."
+      onClose={onClose}
+    >
+      <form
+        className="stack"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void a.run(async () => {
+            onInvited(await api('/invites', { method: 'POST', body: form }));
+          });
+        }}
+      >
+        <Field label="Full name" required>
+          <Input
+            required
+            minLength={2}
+            maxLength={120}
+            value={form.name}
+            onChange={(e) => set('name', e.target.value)}
+            placeholder="e.g. Jane Wanjiru"
+          />
+        </Field>
+        <Field label="Email address" required hint="The invitation is bound to this address.">
+          <Input
+            type="email"
+            required
+            maxLength={200}
+            value={form.email}
+            onChange={(e) => set('email', e.target.value)}
+            placeholder="jane@example.co.ke"
+          />
+        </Field>
+        <Field label="What will they do?" required hint={ROLE_HINTS[form.role_id]}>
+          <select value={form.role_id} onChange={(e) => set('role_id', e.target.value)}>
+            {roles.map((r) => (
+              <option key={r} value={r}>
+                {roleName(r)}
+              </option>
+            ))}
+          </select>
+        </Field>
+        {form.role_id === 'accountant' && (
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={form.reports_access}
+              onChange={(e) => set('reports_access', e.target.checked)}
+            />
+            Allow financial reports (inventory reports remain role-permitted)
+          </label>
+        )}
+        <Field label="Why are you inviting them?" required>
+          <Input
+            value={form.reason}
+            minLength={5}
+            required
+            onChange={(e) => set('reason', e.target.value)}
+            placeholder="e.g. New supervisor for the evening shift"
+          />
+        </Field>
+        <Notice>
+          The link works once and expires after 7 days. Whoever opens it creates the account with the role you
+          chose here — they cannot change it themselves.
+        </Notice>
+        {a.error && <p className="form-error">{a.error}</p>}
+        <div className="form-footer">
+          <Button variant="ghost" type="button" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" busy={a.busy}>
+            <Send size={15} />
+            Create invitation link
+          </Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+/** The link is shown exactly once: only its hash is stored, so it cannot be recovered later. */
+function ShareInvite({ invite, onClose }: { invite: Row; onClose: () => void }) {
+  const [copied, setCopied] = useState(false);
+  const link = `${window.location.origin}${invite.accept_path}`;
+  const subject = `Your ${invite.role_name} account at Kilele`;
+  const body = `Hello ${invite.name},\n\nYou have been invited to join the team workspace.\nOpen this private link to choose your password and create your account:\n${link}\n\nIt works once and expires on ${new Date(invite.expires_at).toLocaleString()}.\nIf it expires, ask for a new invitation.`;
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopied(true);
+    } catch {
+      // Clipboard access can be refused inside an embedded frame; fall back to selecting the text.
+      const field = document.getElementById('invite-link') as HTMLInputElement | null;
+      field?.select();
+      setCopied(false);
+    }
+  };
+  return (
+    <Modal
+      title={`Invitation ready for ${invite.name}`}
+      description="Send this link to the person you invited. It is shown only once."
+      onClose={onClose}
+    >
+      <div className="stack">
+        <div className="invite-summary">
+          <div>
+            <small>Email</small>
+            <strong>{invite.email}</strong>
+          </div>
+          <div>
+            <small>Role</small>
+            <strong>{invite.role_name}</strong>
+          </div>
+          <div>
+            <small>Expires</small>
+            <strong>{new Date(invite.expires_at).toLocaleString()}</strong>
+          </div>
+        </div>
+        <Field label="Invitation link">
+          <div className="invite-link">
+            <Input id="invite-link" readOnly value={link} onFocus={(e) => e.target.select()} />
+            <Button variant="secondary" type="button" onClick={() => void copy()}>
+              {copied ? <Check size={15} /> : <Copy size={15} />}
+              {copied ? 'Copied' : 'Copy'}
+            </Button>
+          </div>
+        </Field>
+        <Notice tone="amber">
+          Anyone holding this link can create the <strong>{invite.role_name}</strong> account, so send it only
+          to {invite.name}. Sending a new link withdraws this one.
+        </Notice>
+        <div className="form-footer">
+          <Button variant="ghost" type="button" onClick={onClose}>
+            Close
+          </Button>
+          <Button
+            type="button"
+            onClick={() =>
+              window.open(
+                `mailto:${invite.email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`,
+              )
+            }
+          >
+            <Mail size={15} />
+            Email this invitation
+          </Button>
+        </div>
+        <p className="human-note">
+          Kilele does not send email itself — no mail provider is configured. This opens your own mail app
+          with the message ready, or you can copy the link into WhatsApp or SMS.
+        </p>
+      </div>
+    </Modal>
+  );
+}
+function WithdrawInvite({
+  invite,
+  onClose,
+  onDone,
+}: {
+  invite: Row;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const a = useAction();
+  const [reason, setReason] = useState('');
+  return (
+    <Modal
+      title={`Withdraw the invitation for ${invite.name}`}
+      description="The link stops working immediately. Nothing already created is removed."
+      onClose={onClose}
+    >
+      <form
+        className="stack"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void a.run(async () => {
+            await api(`/invites/${invite.id}/revoke`, { method: 'POST', body: { reason } });
+            onDone();
+            onClose();
+          }, 'Invitation withdrawn.');
+        }}
+      >
+        <Field label="Reason" required>
+          <Input
+            value={reason}
+            minLength={5}
+            required
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="e.g. Role no longer needed this month"
+          />
+        </Field>
+        {a.error && <p className="form-error">{a.error}</p>}
+        <div className="form-footer">
+          <Button variant="ghost" type="button" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" busy={a.busy}>
+            <Ban size={15} />
+            Withdraw invitation
+          </Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
 export default function Staff() {
   const auth = useAuth(),
     q = useQuery('/staff'),
@@ -158,8 +401,15 @@ export default function Staff() {
     [reset, setReset] = useState<Row | null>(null),
     [password, setPassword] = useState(''),
     [reason, setReason] = useState('');
+  // undefined = closed, null = a brand-new invitation, a row = re-send to that person.
+  const [inviteForm, setInviteForm] = useState<Row | null | undefined>(undefined),
+    [share, setShare] = useState<Row | null>(null),
+    [withdraw, setWithdraw] = useState<Row | null>(null);
   const performance = useQuery('/analytics/staff?' + queryString(range));
-  const users: Row[] = q.data?.users ?? [];
+  const invites = useQuery(auth.can('staff.read') ? '/invites' : null);
+  const users: Row[] = q.data?.users ?? [],
+    invitations: Row[] = invites.data?.invites ?? [],
+    waiting = invitations.filter((i) => i.open).length;
   return (
     <>
       <PageHeader
@@ -173,9 +423,15 @@ export default function Staff() {
               Role permissions
             </Button>
             {auth.can('staff.write') && (
-              <Button onClick={() => setUser(null)}>
+              <Button variant="secondary" onClick={() => setUser(null)}>
                 <Plus size={16} />
-                Add team member
+                Add team member with a password
+              </Button>
+            )}
+            {auth.can('staff.write') && (
+              <Button onClick={() => setInviteForm(null)}>
+                <Send size={16} />
+                Invite team member
               </Button>
             )}
           </>
@@ -318,6 +574,91 @@ export default function Staff() {
       </Panel>
       <Panel
         className="margin-top"
+        title={waiting ? `Invitations · ${waiting} waiting` : 'Invitations'}
+        subtitle="Send a private link and the person creates their own account, with the role you chose. Links work once and expire."
+      >
+        {invites.loading ? (
+          <Loading />
+        ) : invites.error ? (
+          <ErrorState error={invites.error} retry={invites.refresh} />
+        ) : !invitations.length ? (
+          <div className="human-note">
+            <Mail size={15} />
+            No invitations yet. Use “Invite team member” to send a supervisor or an employee a link instead of
+            sharing a password.
+          </div>
+        ) : (
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Person</th>
+                  <th>Role offered</th>
+                  <th>Invited by</th>
+                  <th>Status</th>
+                  <th>Timing</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {invitations.map((i) => {
+                  const label =
+                    i.status === 'accepted'
+                      ? 'Account created'
+                      : i.status === 'revoked'
+                        ? 'Withdrawn'
+                        : i.open
+                          ? 'Awaiting acceptance'
+                          : 'Expired';
+                  return (
+                    <tr key={i.id}>
+                      <td>
+                        <span>
+                          <strong>{i.name}</strong>
+                          <small className="cell-sub">{i.email}</small>
+                        </span>
+                      </td>
+                      <td>
+                        <Badge>{roleName(i.role_id)}</Badge>
+                      </td>
+                      <td>{i.invited_by_name ?? '—'}</td>
+                      <td>
+                        <Badge tone={i.status === 'accepted' ? 'green' : i.open ? 'amber' : 'neutral'} dot>
+                          {label}
+                        </Badge>
+                      </td>
+                      <td>
+                        <span className="inline">
+                          <Clock size={13} />
+                          <small className="cell-sub">
+                            {i.status === 'pending'
+                              ? `Expires ${new Date(i.expires_at).toLocaleString()}`
+                              : `Closed ${new Date(i.closed_at).toLocaleString()}`}
+                          </small>
+                        </span>
+                      </td>
+                      <td>
+                        {auth.can('staff.write') && i.open && (
+                          <div className="row-actions">
+                            <button className="text-button" onClick={() => setInviteForm(i)}>
+                              Send a new link <ArrowUpRight size={12} />
+                            </button>
+                            <button className="text-button" onClick={() => setWithdraw(i)}>
+                              Withdraw
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Panel>
+      <Panel
+        className="margin-top"
         title="Operational performance detail"
         subtitle="A more complete view of each person’s recorded activity."
       >
@@ -405,6 +746,28 @@ export default function Staff() {
             always preserve the original.
           </Notice>
         </Modal>
+      )}
+      {inviteForm !== undefined && (
+        <InviteForm
+          preset={inviteForm ?? undefined}
+          onClose={() => setInviteForm(undefined)}
+          onInvited={(created) => {
+            setInviteForm(undefined);
+            setShare(created);
+            invites.refresh();
+          }}
+        />
+      )}
+      {share && <ShareInvite invite={share} onClose={() => setShare(null)} />}
+      {withdraw && (
+        <WithdrawInvite
+          invite={withdraw}
+          onClose={() => setWithdraw(null)}
+          onDone={() => {
+            invites.refresh();
+            q.refresh();
+          }}
+        />
       )}
       {reset && (
         <Modal

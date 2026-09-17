@@ -1,14 +1,17 @@
 import express from 'express';
 import { guardEnvironment } from './environment.js';
-import helmet from 'helmet';
-import cookieParser from 'cookie-parser';
-import { rateLimit } from 'express-rate-limit';
-import { ZodError, z } from 'zod';
+import { z } from 'zod';
 import { mutate } from './mutate.js';
 import { financialOperation } from '../shared/operations.js';
 import {
+  installApiNotFound,
+  installErrorHandling,
+  installSecurityMiddleware,
+  validateAppOptions,
+  type AppOptions,
+} from './app-shared.js';
+import {
   type DB,
-  AppError,
   integrity,
   one,
   requireThat,
@@ -21,6 +24,7 @@ import {
   demand,
 } from './core.js';
 import { installManagement } from './management.js';
+import { installInvites } from './invites.js';
 import { installReports } from './reports.js';
 import { installAnalytics } from './analytics.js';
 import { installApprovals } from './approvals.js';
@@ -29,72 +33,17 @@ import { installInventory } from './inventory.js';
 import { installSales } from './sales.js';
 import { installProducts } from './products.js';
 import { installAuth, protect } from './auth.js';
-export type AppOptions = {
-  preview?: boolean;
-  production?: boolean;
-  origin?: string;
-  trustProxy?: number | string[];
-};
+export type { AppOptions };
+
+/**
+ * The SQLite HTTP surface. Security middleware and the error contract come from
+ * server/app-shared.ts so the PostgreSQL app (server/postgres/app.ts) behaves identically.
+ */
 export function createApp(db: DB, options: AppOptions = {}) {
-  if (options.production && options.preview)
-    throw new Error('Refusing production startup: PREVIEW_MODE must be disabled.');
-  if (options.production && (!options.origin || !options.origin.startsWith('https://')))
-    throw new Error('Production requires an HTTPS APP_ORIGIN.');
-  if (options.production) {
-    let valid = false;
-    try {
-      const origin = new URL(options.origin!);
-      valid =
-        origin.protocol === 'https:' &&
-        origin.origin === options.origin &&
-        !origin.username &&
-        !origin.password &&
-        !origin.search &&
-        !origin.hash;
-    } catch {
-      /* invalid origin */
-    }
-    if (!valid)
-      throw new Error(
-        'APP_ORIGIN must be an exact HTTPS origin, without credentials, path, query or trailing slash.',
-      );
-  }
+  validateAppOptions(options);
   guardEnvironment(db, options.preview ?? false, options.production ?? false);
   const app = express();
-  app.disable('x-powered-by');
-  if (options.trustProxy !== undefined) app.set('trust proxy', options.trustProxy);
-  app.use(
-    helmet({
-      xFrameOptions: options.production ? { action: 'deny' } : false,
-      contentSecurityPolicy: {
-        directives: {
-          defaultSrc: ["'self'"],
-          scriptSrc: ["'self'"],
-          styleSrc: ["'self'", "'unsafe-inline'"],
-          imgSrc: ["'self'", 'data:'],
-          fontSrc: ["'self'"],
-          connectSrc: ["'self'"],
-          frameAncestors: options.production ? ["'none'"] : ['*'],
-        },
-      },
-    }),
-  );
-  app.use(express.json({ limit: '4mb' }));
-  app.use(cookieParser());
-  app.use(
-    '/api',
-    rateLimit({
-      windowMs: 60_000,
-      limit: 600,
-      standardHeaders: 'draft-7',
-      legacyHeaders: false,
-      message: { error: 'Too many requests. Please wait a moment.' },
-    }),
-  );
-  app.use('/api', (_req, res, next) => {
-    res.set('Cache-Control', 'no-store');
-    next();
-  });
+  installSecurityMiddleware(app, options);
   installAuth(app, db, {
     preview: options.preview ?? false,
     production: options.production ?? false,
@@ -199,29 +148,12 @@ export function createApp(db: DB, options: AppOptions = {}) {
   installAnalytics(app, db);
   installReports(app, db);
   installManagement(app, db);
-  // DOMAIN_ROUTES
-  app.use('/api', (_req, res) => res.status(404).json({ error: 'Endpoint not found.' }));
-  app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-    if (err instanceof ZodError)
-      return res.status(400).json({
-        error: err.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '),
-        code: 'VALIDATION_ERROR',
-      });
-    if (err instanceof AppError) return res.status(err.status).json({ error: err.message, code: err.code });
-    if (err.code?.startsWith('SQLITE_CONSTRAINT'))
-      return res.status(409).json({
-        error:
-          'This action conflicts with an existing record or an accounting constraint. Refresh and check references before retrying.',
-        code: 'CONFLICT',
-      });
-    if (err.type === 'entity.too.large')
-      return res.status(413).json({ error: 'Document or request is too large.' });
-    if (err instanceof SyntaxError) return res.status(400).json({ error: 'Invalid JSON request.' });
-    console.error('Server error', err);
-    return res.status(500).json({
-      error: 'The operation could not be completed. No partial transaction was saved.',
-      code: 'INTERNAL_ERROR',
-    });
+  installInvites(app, db, {
+    preview: options.preview ?? false,
+    production: options.production ?? false,
   });
+  // DOMAIN_ROUTES
+  installApiNotFound(app);
+  installErrorHandling(app);
   return app;
 }
